@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "luki-api-gateway"
+version = "0.1.0"
+description = "Unified HTTP interface for the LUKi agent & modules"
+readme = "README.md"
+authors = [
+    {name = "LUKi Development Team", email = "dev@remelife.com"}
+]
+license = {text = "Proprietary"}
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.68.0",
+    "uvicorn>=0.15.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "httpx>=0.23.0",
+    "python-jose>=3.3.0",
+    "slowapi>=0.1.5",
+    "redis>=4.5.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=22.0.0",
+    "flake8>=5.0.0",
+    "mypy>=1.0.0"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["luki_api*"]
+
+[tool.setuptools.package-data]
+luki_api = ["py.typed"]
