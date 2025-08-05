@@ -1,15 +1,36 @@
-from fastapi import Request, HTTPException, Depends
+"""Authentication Middleware Module
+
+This module provides authentication middleware for the API Gateway,
+supporting both JWT token and API key authentication methods.
+"""
+from fastapi import Request, HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from luki_api.config import settings
-from typing import Optional
+from typing import Optional, Callable
 import logging
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 logger = logging.getLogger(__name__)
 
-async def auth_middleware(request: Request, call_next):
+async def auth_middleware(request: Request, call_next: Callable):
     """
     Authentication middleware that validates API keys or JWT tokens
+    
+    This middleware handles two authentication methods:
+    1. API Key - Validates keys from the X-API-Key header against registered keys
+    2. JWT Token - Validates bearer tokens from the Authorization header
+    
+    Authentication is skipped for health check endpoints and the root path.
+    
+    Args:
+        request: FastAPI Request object
+        call_next: Next middleware or route handler in the chain
+        
+    Returns:
+        FastAPI Response object
+        
+    Raises:
+        HTTPException 401: If authentication fails or is missing
     """
     # Skip auth for health checks and root path
     if request.url.path in ["/health", "/health/", "/"]:
