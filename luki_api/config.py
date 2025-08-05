@@ -2,6 +2,9 @@ from pydantic_settings import BaseSettings
 from typing import List, Optional
 
 class Settings(BaseSettings):
+    # API metadata
+    VERSION: str = "0.1.0"
+    
     # Server settings
     HOST: str = "0.0.0.0"
     PORT: int = 8000
