@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from luki_api.routes import chat, elr, health
-from luki_api.middleware import auth, rate_limit, logging
+from luki_api.routes import chat, elr, health, metrics
+from luki_api.middleware import auth, rate_limit, logging, metrics as metrics_middleware
 from luki_api.config import settings
 import logging as python_logging
 
@@ -13,7 +13,10 @@ logger = python_logging.getLogger(__name__)
 app = FastAPI(
     title="LUKi API Gateway",
     description="Unified HTTP interface for the LUKi agent & modules",
-    version="0.1.0"
+    version=settings.VERSION,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json"
 )
 
 # Add middleware
@@ -27,6 +30,8 @@ app.add_middleware(
 
 # Add custom middleware - logging first to capture all requests
 app.middleware("http")(logging.request_logging_middleware)
+# Add metrics middleware after logging but before auth to capture all requests
+app.middleware("http")(metrics_middleware.metrics_middleware)
 app.middleware("http")(auth.auth_middleware)
 app.middleware("http")(rate_limit.rate_limit_middleware)
 
@@ -34,6 +39,7 @@ app.middleware("http")(rate_limit.rate_limit_middleware)
 app.include_router(health.router, prefix="/health", tags=["health"])
 app.include_router(chat.router, prefix="/v1/chat", tags=["chat"])
 app.include_router(elr.router, prefix="/v1/elr", tags=["elr"])
+app.include_router(metrics.router, prefix="/metrics", tags=["metrics"])
 
 @app.get("/")
 async def root():

@@ -5,9 +5,15 @@ This module provides a client for interacting with the luki-memory-service API.
 """
 import httpx
 import logging
+import time
 from typing import Dict, List, Optional, Any, Union
 from pydantic import BaseModel
 from luki_api.config import settings
+from luki_api.middleware.metrics import (
+    track_memory_service_request,
+    track_memory_service_latency,
+    track_memory_service_error
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +77,10 @@ class MemoryServiceClient:
         if isinstance(data, BaseModel):
             data = data.model_dump()
             
+        # Track the request to the memory service
+        track_memory_service_request(method.upper(), endpoint)
+        start_time = time.time()
+        
         try:
             async with httpx.AsyncClient() as client:
                 if method.lower() == "get":
@@ -86,9 +96,16 @@ class MemoryServiceClient:
                 
                 # Handle non-2xx responses
                 response.raise_for_status()
+                # Track successful request latency
+                duration = time.time() - start_time
+                track_memory_service_latency(method.upper(), endpoint, duration)
                 return response.json()
                 
         except httpx.HTTPStatusError as e:
+            # Track error with status code
+            error_type = f"HTTP{e.response.status_code}"
+            track_memory_service_error(method.upper(), endpoint, error_type)
+            
             try:
                 error_data = e.response.json()
                 error_msg = error_data.get("detail", str(e))
@@ -103,9 +120,17 @@ class MemoryServiceClient:
                 response_data=error_data
             )
         except httpx.RequestError as e:
+            # Track connection error
+            error_type = "ConnectionError"
+            track_memory_service_error(method.upper(), endpoint, error_type)
+            
             logger.error(f"Memory service request failed: {str(e)}")
             raise MemoryServiceError(message=f"Request failed: {str(e)}")
         except Exception as e:
+            # Track unexpected errors
+            error_type = type(e).__name__
+            track_memory_service_error(method.upper(), endpoint, error_type)
+            
             logger.error(f"Unexpected error in memory service client: {str(e)}")
             raise MemoryServiceError(message=f"Unexpected error: {str(e)}")
             
