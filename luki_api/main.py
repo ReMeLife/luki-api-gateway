@@ -1,13 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from luki_api.routes import chat, elr, health
-from luki_api.middleware import auth, rate_limit
+from luki_api.middleware import auth, rate_limit, logging
 from luki_api.config import settings
-import logging
+import logging as python_logging
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+python_logging.basicConfig(level=python_logging.INFO)
+logger = python_logging.getLogger(__name__)
 
 # Create FastAPI app instance
 app = FastAPI(
@@ -25,7 +25,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Add custom middleware
+# Add custom middleware - logging first to capture all requests
+app.middleware("http")(logging.request_logging_middleware)
 app.middleware("http")(auth.auth_middleware)
 app.middleware("http")(rate_limit.rate_limit_middleware)
 
