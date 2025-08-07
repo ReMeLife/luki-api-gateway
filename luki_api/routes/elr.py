@@ -20,6 +20,7 @@ async def get_memory_client():
         yield client
     except Exception as e:
         logger.error(f"Error with memory service client: {str(e)}")
+        raise  # Re-raise the exception to ensure proper FastAPI error handling
 
 class ELRItem(BaseModel):
     """Electronic Life Record (ELR) item schema"""
