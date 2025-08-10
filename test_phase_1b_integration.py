@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 class Phase1BIntegrationTester:
     """Integration tester for Phase 1B Agent-Gateway integration"""
     
-    def __init__(self, gateway_url: str = "http://localhost:8080", agent_url: str = "http://localhost:9000"):
+    def __init__(self, gateway_url: str = "http://localhost:8081", agent_url: str = "http://localhost:9000"):
         self.gateway_url = gateway_url
         self.agent_url = agent_url
         self.client = httpx.AsyncClient(timeout=30.0)

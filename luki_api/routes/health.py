@@ -22,7 +22,7 @@ class HealthResponse(BaseModel):
             }
         }
 
-@router.get("/",
+@router.get("/health",
           response_model=HealthResponse,
           status_code=status.HTTP_200_OK,
           summary="Health Check",
