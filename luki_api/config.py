@@ -23,7 +23,10 @@ class Settings(BaseSettings):
     RATE_LIMIT_REQUESTS_PER_MINUTE: int = 60
     
     # Memory service settings
-    MEMORY_SERVICE_URL: str = "http://localhost:8001"
+    MEMORY_SERVICE_URL: str = "http://localhost:8002"
+    
+    # Agent service settings
+    AGENT_SERVICE_URL: str = "http://localhost:9000"
     
     # Redis settings (for rate limiting)
     REDIS_URL: str = "redis://localhost:6379"

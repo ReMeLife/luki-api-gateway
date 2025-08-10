@@ -7,6 +7,7 @@ import logging
 import json
 import asyncio
 from luki_api.config import settings
+from luki_api.clients.agent_client import agent_client, AgentChatRequest
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -117,16 +118,70 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
     """
     logger.info(f"Chat request received for user: {chat_request.user_id}")
     
-    # In a real implementation, this would call the LUKi core agent
-    # For now, we'll simulate a response
-    response_message = ChatMessage(
-        role="assistant",
-        content=f"Hello! I'm LUKi, your AI companion. I've received your message: {chat_request.messages[-1].content}"
-    )
-    
-    return ChatResponse(
-        message=response_message,
-        session_id=chat_request.session_id or "new-session-id"
+    try:
+        # Validate request
+        if not chat_request.messages:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one message is required"
+            )
+        
+        # Get the latest user message
+        latest_message = chat_request.messages[-1]
+        if latest_message.role != "user":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Latest message must be from user"
+            )
+        
+        # Prepare agent request
+        agent_request = AgentChatRequest(
+            message=latest_message.content,
+            user_id=chat_request.user_id,
+            session_id=chat_request.session_id,
+            context={
+                "conversation_history": [
+                    {"role": msg.role, "content": msg.content} 
+                    for msg in chat_request.messages[:-1]  # Exclude the latest message
+                ]
+            }
+        )
+        
+        # Call the core agent
+        agent_response = await agent_client.chat(agent_request)
+        
+        # Format response
+        response_message = ChatMessage(
+            role="assistant",
+            content=agent_response.response
+        )
+        
+        return ChatResponse(
+            message=response_message,
+            session_id=agent_response.session_id,
+            metadata=agent_response.metadata
+        )
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Agent service error: {e.response.status_code}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Agent service unavailable"
+        )
+    except httpx.RequestError as e:
+        logger.error(f"Agent service connection error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to connect to agent service"
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error in chat endpoint: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
     )
 
 @router.post("/stream",
@@ -160,15 +215,55 @@ async def chat_stream_endpoint(chat_request: ChatRequest, request: Request):
     """
     logger.info(f"Streaming chat request received for user: {chat_request.user_id}")
     
-    # This would implement streaming responses in a real scenario
-    # For now, we'll just return a standard response with a streaming flag
-    response_message = ChatMessage(
-        role="assistant",
-        content=f"Hello! I'm LUKi, your AI companion. I've received your message: {chat_request.messages[-1].content}"
-    )
+    async def generate_stream():
+        try:
+            # Validate request
+            if not chat_request.messages:
+                yield f"data: {json.dumps({'error': 'At least one message is required'})}\n\n"
+                return
+            
+            # Get the latest user message
+            latest_message = chat_request.messages[-1]
+            if latest_message.role != "user":
+                yield f"data: {json.dumps({'error': 'Latest message must be from user'})}\n\n"
+                return
+            
+            # Prepare agent request
+            agent_request = AgentChatRequest(
+                message=latest_message.content,
+                user_id=chat_request.user_id,
+                session_id=chat_request.session_id,
+                context={
+                    "conversation_history": [
+                        {"role": msg.role, "content": msg.content} 
+                        for msg in chat_request.messages[:-1]
+                    ]
+                }
+            )
+            
+            # Stream response from agent
+            async for token in agent_client.chat_stream(agent_request):
+                yield f"data: {json.dumps({'token': token})}\n\n"
+            
+            # Send completion signal
+            yield f"data: {json.dumps({'done': True})}\n\n"
+            
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Agent service streaming error: {e.response.status_code}")
+            yield f"data: {json.dumps({'error': 'Agent service unavailable'})}\n\n"
+        except httpx.RequestError as e:
+            logger.error(f"Agent service streaming connection error: {e}")
+            yield f"data: {json.dumps({'error': 'Unable to connect to agent service'})}\n\n"
+        except Exception as e:
+            logger.error(f"Unexpected error in streaming endpoint: {e}")
+            yield f"data: {json.dumps({'error': 'Internal server error'})}\n\n"
     
-    return {
-        "message": response_message,
-        "session_id": chat_request.session_id or "new-session-id",
-        "streaming": True
-    }
+    return StreamingResponse(
+        generate_stream(),
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Content-Type": "text/event-stream"
+        }
+    )
