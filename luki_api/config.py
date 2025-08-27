@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_REQUESTS_PER_MINUTE: int = 100  # Increased for development
     
     # Memory service settings
-    MEMORY_SERVICE_URL: str = "http://localhost:8002"
+    MEMORY_SERVICE_URL: str = "http://localhost:8000"
     MEMORY_SERVICE_TIMEOUT: int = 30
     
     # Agent service settings (LUKi Core Agent with Together AI)

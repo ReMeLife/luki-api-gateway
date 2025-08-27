@@ -8,6 +8,7 @@ import json
 import asyncio
 from luki_api.config import settings
 from luki_api.clients.agent_client import agent_client, AgentChatRequest
+from luki_api.clients.memory_service import MemoryServiceClient, ELRQueryRequest
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -134,7 +135,23 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
                 detail="Latest message must be from user"
             )
         
-        # Prepare agent request
+        # Retrieve memory context from memory service
+        memory_context = []
+        try:
+            memory_client = MemoryServiceClient()
+            query_request = ELRQueryRequest(
+                user_id=chat_request.user_id,
+                query_text=latest_message.content,
+                limit=5
+            )
+            memory_response = await memory_client.search_elr_items(query_request)
+            memory_context = memory_response.get("results", [])
+            logger.info(f"Retrieved {len(memory_context)} memory items for user {chat_request.user_id}")
+        except Exception as e:
+            logger.warning(f"Memory retrieval failed for user {chat_request.user_id}: {e}")
+            # Continue without memory context
+
+        # Prepare agent request with memory context
         agent_request = AgentChatRequest(
             message=latest_message.content,
             user_id=chat_request.user_id,
@@ -143,7 +160,8 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
                 "conversation_history": [
                     {"role": msg.role, "content": msg.content} 
                     for msg in chat_request.messages[:-1]  # Exclude the latest message
-                ]
+                ],
+                "memory_context": memory_context
             }
         )
         
@@ -228,7 +246,23 @@ async def chat_stream_endpoint(chat_request: ChatRequest, request: Request):
                 yield f"data: {json.dumps({'error': 'Latest message must be from user'})}\n\n"
                 return
             
-            # Prepare agent request
+            # Retrieve memory context from memory service for streaming
+            memory_context = []
+            try:
+                memory_client = MemoryServiceClient()
+                query_request = ELRQueryRequest(
+                    user_id=chat_request.user_id,
+                    query_text=latest_message.content,
+                    limit=5
+                )
+                memory_response = await memory_client.search_elr_items(query_request)
+                memory_context = memory_response.get("results", [])
+                logger.info(f"Retrieved {len(memory_context)} memory items for streaming user {chat_request.user_id}")
+            except Exception as e:
+                logger.warning(f"Memory retrieval failed for streaming user {chat_request.user_id}: {e}")
+                # Continue without memory context
+
+            # Prepare agent request with memory context
             agent_request = AgentChatRequest(
                 message=latest_message.content,
                 user_id=chat_request.user_id,
@@ -237,7 +271,8 @@ async def chat_stream_endpoint(chat_request: ChatRequest, request: Request):
                     "conversation_history": [
                         {"role": msg.role, "content": msg.content} 
                         for msg in chat_request.messages[:-1]
-                    ]
+                    ],
+                    "memory_context": memory_context
                 }
             )
             
