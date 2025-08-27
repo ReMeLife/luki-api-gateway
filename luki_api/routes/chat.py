@@ -85,7 +85,7 @@ class ChatResponse(BaseModel):
             }
         }
 
-@router.post("/", 
+@router.post("", 
          response_model=ChatResponse,
          status_code=status.HTTP_200_OK,
          summary="Chat with LUKi Agent",
