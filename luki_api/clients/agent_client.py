@@ -38,10 +38,11 @@ class AgentClient:
     def __init__(self, base_url: Optional[str] = None):
         self.base_url = base_url or settings.AGENT_SERVICE_URL
         self.client = httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0),
-            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5)
+            timeout=httpx.Timeout(settings.AGENT_SERVICE_TIMEOUT),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10)
         )
         logger.info(f"AgentClient initialized with base_url: {self.base_url}")
+        logger.info(f"Agent service timeout: {settings.AGENT_SERVICE_TIMEOUT}s")
     
     async def __aenter__(self):
         return self
@@ -86,7 +87,11 @@ class AgentClient:
             response = await self.client.post(
                 f"{self.base_url}/v1/chat",
                 json=payload,
-                headers={"Content-Type": "application/json"}
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "User-Agent": "LUKi-API-Gateway/0.2.0"
+                }
             )
             
             response.raise_for_status()
@@ -140,7 +145,11 @@ class AgentClient:
                 "POST",
                 f"{self.base_url}/v1/chat/stream",
                 json=payload,
-                headers={"Content-Type": "application/json"}
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "text/event-stream",
+                    "User-Agent": "LUKi-API-Gateway/0.2.0"
+                }
             ) as response:
                 response.raise_for_status()
                 

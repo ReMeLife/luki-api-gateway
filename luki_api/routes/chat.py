@@ -182,7 +182,7 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error"
-    )
+        )
 
 @router.post("/stream",
          summary="Streaming Chat with LUKi Agent",
