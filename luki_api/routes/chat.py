@@ -141,8 +141,8 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
             memory_client = MemoryServiceClient()
             query_request = ELRQueryRequest(
                 user_id=chat_request.user_id,
-                query_text=latest_message.content,
-                limit=5
+                query=latest_message.content,  # Changed from query_text
+                k=5  # Changed from limit
             )
             memory_response = await memory_client.search_elr_items(query_request)
             memory_context = memory_response.get("results", [])
@@ -252,8 +252,8 @@ async def chat_stream_endpoint(chat_request: ChatRequest, request: Request):
                 memory_client = MemoryServiceClient()
                 query_request = ELRQueryRequest(
                     user_id=chat_request.user_id,
-                    query_text=latest_message.content,
-                    limit=5
+                    query=latest_message.content,  # Changed from query_text
+                    k=5  # Changed from limit
                 )
                 memory_response = await memory_client.search_elr_items(query_request)
                 memory_context = memory_response.get("results", [])
