@@ -1,6 +1,11 @@
 # luki-api-gateway  
 *Unified HTTP interface for the LUKi agent & modules (auth, routing, rate limits)*  
 **PRIVATE / PROPRIETARY – Internal use only**
+---
+
+## License
+
+This project is licensed under the [Apache 2.0 License with ReMeLife custom clauses]
 
 ---
 
