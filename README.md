@@ -1,6 +1,8 @@
 # luki-api-gateway  
-*Unified HTTP interface for the LUKi agent & modules (auth, routing, rate limits)*  
-**PRIVATE / PROPRIETARY – Internal use only**
+*Unified HTTP interface for the LUKi agent & modules (auth, routing, rate limits)*
+
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
 ---
 
@@ -40,58 +42,73 @@ It hides internal topology, giving external consumers a stable, documented REST 
 
 ## 4. Repository Structure  
 ~~~text
-luki_api_gateway/
+luki-api-gateway/
 ├── README.md
 ├── pyproject.toml
-├── luki_gateway/
+├── requirements.txt
+├── env.example                  # environment template (copy to .env)
+├── .env                         # actual environment file (gitignored)
+├── luki_api/                    # main package
 │   ├── __init__.py
 │   ├── config.py                # env vars, service URLs, rate limits
 │   ├── main.py                  # FastAPI app entry
 │   ├── auth/
-│   │   ├── middleware.py        # authn/z middleware
-│   │   ├── tokens.py            # API key/JWT utils
-│   │   └── scopes.py            # scope constants
+│   │   ├── __init__.py
+│   │   ├── api_key.py           # API key authentication
+│   │   ├── jwt.py               # JWT token handling
+│   │   └── rbac.py              # role-based access control
 │   ├── middleware/
-│   │   ├── tracing.py           # request IDs, OTEL
-│   │   └── rate_limit.py        # limiter
-│   ├── routers/
+│   │   ├── __init__.py
+│   │   ├── auth.py              # authentication middleware
+│   │   ├── logging.py           # structured logging
+│   │   ├── metrics.py           # metrics collection
+│   │   ├── rate_limit.py        # rate limiting
+│   │   └── tracing.py           # request tracing
+│   ├── routes/
+│   │   ├── __init__.py
 │   │   ├── chat.py              # /v1/chat endpoints
 │   │   ├── elr.py               # /v1/elr proxy routes
-│   │   ├── activities.py        # /v1/activities proxy
-│   │   ├── reports.py           # /v1/reports proxy
-│   │   └── health.py            # /healthz, /metrics
+│   │   ├── activities.py        # /v1/activities proxy (planned)
+│   │   ├── reports.py           # /v1/reports proxy (planned)
+│   │   ├── health.py            # /health endpoint
+│   │   └── metrics.py           # /metrics endpoint
 │   ├── clients/
-│   │   ├── agent_client.py      # call luki-core-agent internal API
-│   │   ├── memory_client.py     # call luki-memory-service
-│   │   ├── cognitive_client.py  # call luki-modules-cognitive
-│   │   ├── engagement_client.py # call luki-modules-engagement
-│   │   └── reporting_client.py  # call luki-modules-reporting
+│   │   ├── __init__.py
+│   │   ├── agent_client.py      # LUKi core agent client
+│   │   ├── memory_service.py    # memory service client
+│   │   ├── cognitive_client.py  # cognitive module client (planned)
+│   │   ├── engagement_client.py # engagement module client (planned)
+│   │   └── reporting_client.py  # reporting module client (planned)
 │   ├── schemas/
-│   │   ├── chat.py              # request/response models
-│   │   ├── elr.py
-│   │   ├── activities.py
-│   │   └── common.py
+│   │   ├── __init__.py          # (planned)
+│   │   ├── chat.py              # request/response models (planned)
+│   │   ├── elr.py               # ELR models (planned)
+│   │   ├── activities.py        # activity models (planned)
+│   │   └── common.py            # shared models (planned)
+│   ├── models/
+│   │   └── errors.py            # error models and handling
 │   └── utils/
-│       ├── errors.py            # error mapping
-│       └── responses.py
+│       ├── errors.py            # error mapping (planned)
+│       └── responses.py         # response utilities (planned)
 ├── docker/
-│   └── Dockerfile
+│   └── Dockerfile               # container build (planned)
 ├── scripts/
-│   └── run_dev.sh
+│   ├── run_dev.sh               # bash development script
+│   └── run_dev_api_gateway.py   # python development script
 └── tests/
-    ├── unit/
-    └── integration/
+    ├── integration/             # integration tests
+    └── unit/                    # unit tests (when added)
 ~~~
 
 ---
 
-## 5. Quick Start (Internal Dev)  
+## 5. Quick Start  
 ~~~bash
-git clone git@github.com:REMELife/luki-api-gateway.git
+git clone https://github.com/your-org/luki-api-gateway.git
 cd luki-api-gateway
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-uvicorn luki_gateway.main:app --reload --port 8080
+uvicorn luki_api.main:app --reload --port 8081
 ~~~
 
 Set env vars in `.env` or export:
@@ -144,6 +161,12 @@ Response:
 ### Reports Generate  
 `POST /v1/reports/generate` with `{"user_id":"...", "window_days":7}`
 
+### Health Check  
+`GET /health` - Service health and status
+
+### Metrics  
+`GET /metrics` - Prometheus metrics for monitoring
+
 ---
 
 ## 7. Auth & Rate Limiting  
@@ -194,18 +217,36 @@ pytest -q
 
 ---
 
-## 12. Contributing (Internal Only)  
-- Branch naming: `gw/<feature>`  
-- No hard-coded secrets; rely on env or Vault.  
-- Keep OpenAPI schema updated (`/openapi.json` diff in CI).  
-- PR requires 1 reviewer + green CI.
+## 12. Contributing  
+
+We welcome contributions to the LUKi API Gateway! Please follow these guidelines:
+
+### Development Workflow
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/your-feature`
+3. Make your changes and add tests
+4. Run the test suite: `pytest`
+5. Submit a pull request
+
+### Code Standards
+- Follow PEP 8 style guidelines
+- Add type hints for all functions
+- Write tests for new functionality
+- No hard-coded secrets; use environment variables
+- Keep OpenAPI schema updated
+- PR requires review + passing CI
 
 ---
 
 ## 13. License  
-**Proprietary – All Rights Reserved**  
-Copyright © 2025 Singularities Ltd / ReMeLife.  
-Unauthorized copying, modification, distribution, or disclosure is strictly prohibited.
+
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+
+## 14. Support
+
+- **Documentation:** Check the `/docs` endpoint when running the server
+- **Issues:** Report bugs and feature requests via GitHub Issues
+- **Discussions:** Join community discussions for questions and ideas
 
 ---
 

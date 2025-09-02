@@ -3,14 +3,14 @@ requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "luki-api-gateway"
+name = "ai-agent-gateway"
 version = "0.1.0"
-description = "Unified HTTP interface for the LUKi agent & modules"
+description = "Unified HTTP interface for AI agents and services"
 readme = "README.md"
 authors = [
-    {name = "LUKi Development Team", email = "dev@remelife.com"}
+    {name = "AI Agent Gateway Contributors", email = "contributors@example.com"}
 ]
-license = {text = "Proprietary"}
+license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.68.0",
