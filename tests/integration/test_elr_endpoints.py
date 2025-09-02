@@ -6,7 +6,6 @@ from fastapi.testclient import TestClient
 import json
 from unittest.mock import patch
 
-@pytest.mark.usefixtures("mock_auth_middleware")
 class TestELREndpoints:
     """Test cases for ELR (Electronic Life Record) endpoints"""
     

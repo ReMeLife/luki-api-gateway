@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from luki_api.routes import chat, elr, health, metrics
 from luki_api.middleware import auth, rate_limit, logging, metrics as metrics_middleware
 from luki_api.config import settings
+from luki_api.clients.agent_client import agent_client
 import logging as python_logging
 
 # Configure logging
@@ -36,10 +37,24 @@ app.middleware("http")(auth.auth_middleware)
 app.middleware("http")(rate_limit.rate_limit_middleware)
 
 # Include routers
-app.include_router(health.router, prefix="/health", tags=["health"])
-app.include_router(chat.router, prefix="/v1/chat", tags=["chat"])
+app.include_router(health.router, prefix="", tags=["health"])  # No prefix for health
+app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(elr.router, prefix="/v1/elr", tags=["elr"])
 app.include_router(metrics.router, prefix="/metrics", tags=["metrics"])
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on startup"""
+    logger.info("Starting LUKi API Gateway...")
+    logger.info(f"Agent service URL: {settings.AGENT_SERVICE_URL}")
+    logger.info(f"Memory service URL: {settings.MEMORY_SERVICE_URL}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up resources on shutdown"""
+    logger.info("Shutting down LUKi API Gateway...")
+    await agent_client.close()
+    logger.info("Agent client closed")
 
 @app.get("/")
 async def root():

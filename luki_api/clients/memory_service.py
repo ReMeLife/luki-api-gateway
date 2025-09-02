@@ -9,11 +9,12 @@ import time
 from typing import Dict, List, Optional, Any, Union
 from pydantic import BaseModel
 from luki_api.config import settings
-from luki_api.middleware.metrics import (
-    track_memory_service_request,
-    track_memory_service_latency,
-    track_memory_service_error
-)
+# Metrics tracking temporarily disabled to avoid initialization issues
+# from luki_api.middleware.metrics import (
+#     track_memory_service_request,
+#     track_memory_service_latency,
+#     track_memory_service_error
+# )
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +28,8 @@ class ELRItemRequest(BaseModel):
 class ELRQueryRequest(BaseModel):
     """Schema for ELR query requests"""
     user_id: str
-    query_text: str
-    limit: Optional[int] = 10
+    query: str  # Changed from query_text to match Memory Service API
+    k: Optional[int] = 10  # Changed from limit to match Memory Service API
 
 class MemoryServiceError(Exception):
     """Exception raised for errors in memory service communication"""
@@ -77,34 +78,49 @@ class MemoryServiceClient:
         if isinstance(data, BaseModel):
             data = data.model_dump()
             
-        # Track the request to the memory service
-        track_memory_service_request(method.upper(), endpoint)
+        # Track the request to the memory service (disabled)
+        # track_memory_service_request(method.upper(), endpoint)
         start_time = time.time()
+        
+        # Create service token for authentication
+        headers = {}
+        try:
+            # Get service token from memory service
+            async with httpx.AsyncClient() as auth_client:
+                token_response = await auth_client.post(
+                    f"{self.base_url.rstrip('/')}/auth/service-token",
+                    timeout=self.timeout
+                )
+                if token_response.status_code == 200:
+                    token_data = token_response.json()
+                    headers["Authorization"] = f"Bearer {token_data['access_token']}"
+        except Exception as e:
+            logger.warning(f"Failed to get service token: {e}. Proceeding without auth.")
         
         try:
             async with httpx.AsyncClient() as client:
                 if method.lower() == "get":
-                    response = await client.get(url, params=params, timeout=self.timeout)
+                    response = await client.get(url, params=params, headers=headers, timeout=self.timeout)
                 elif method.lower() == "post":
-                    response = await client.post(url, json=data, timeout=self.timeout)
+                    response = await client.post(url, json=data, headers=headers, timeout=self.timeout)
                 elif method.lower() == "put":
-                    response = await client.put(url, json=data, timeout=self.timeout)
+                    response = await client.put(url, json=data, headers=headers, timeout=self.timeout)
                 elif method.lower() == "delete":
-                    response = await client.delete(url, params=params, timeout=self.timeout)
+                    response = await client.delete(url, params=params, headers=headers, timeout=self.timeout)
                 else:
                     raise ValueError(f"Unsupported HTTP method: {method}")
                 
                 # Handle non-2xx responses
                 response.raise_for_status()
-                # Track successful request latency
+                # Track successful request latency (disabled)
                 duration = time.time() - start_time
-                track_memory_service_latency(method.upper(), endpoint, duration)
+                # track_memory_service_latency(method.upper(), endpoint, duration)
                 return response.json()
                 
         except httpx.HTTPStatusError as e:
-            # Track error with status code
+            # Track error with status code (disabled)
             error_type = f"HTTP{e.response.status_code}"
-            track_memory_service_error(method.upper(), endpoint, error_type)
+            # track_memory_service_error(method.upper(), endpoint, error_type)
             
             try:
                 error_data = e.response.json()
@@ -120,16 +136,16 @@ class MemoryServiceClient:
                 response_data=error_data
             )
         except httpx.RequestError as e:
-            # Track connection error
+            # Track connection error (disabled)
             error_type = "ConnectionError"
-            track_memory_service_error(method.upper(), endpoint, error_type)
+            # track_memory_service_error(method.upper(), endpoint, error_type)
             
             logger.error(f"Memory service request failed: {str(e)}")
             raise MemoryServiceError(message=f"Request failed: {str(e)}")
         except Exception as e:
-            # Track unexpected errors
+            # Track unexpected errors (disabled)
             error_type = type(e).__name__
-            track_memory_service_error(method.upper(), endpoint, error_type)
+            # track_memory_service_error(method.upper(), endpoint, error_type)
             
             logger.error(f"Unexpected error in memory service client: {str(e)}")
             raise MemoryServiceError(message=f"Unexpected error: {str(e)}")
@@ -195,4 +211,4 @@ class MemoryServiceClient:
         Returns:
             Search results including matched items
         """
-        return await self._make_request("post", "/api/elr/search", data=query)
+        return await self._make_request("post", "/search/memories", data=query)
