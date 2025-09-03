@@ -32,11 +32,18 @@ async def auth_middleware(request: Request, call_next: Callable):
     Raises:
         HTTPException 401: If authentication fails or is missing
     """
-    # Skip auth for health checks, root path, test endpoints, and chat (for testing)
+    # Skip auth for health checks, root path, test endpoints, and anonymous chat
     skip_paths = ["/health", "/health/", "/", "/docs", "/openapi.json", "/redoc"]
-    skip_prefixes = ["/api/chat", "/api/elr/search"]  # Allow ELR search for testing
+    skip_prefixes = ["/api/chat"]  # Allow anonymous chat access
     
-    if request.url.path in skip_paths or any(request.url.path.startswith(prefix) for prefix in skip_prefixes):
+    # Allow anonymous access but set user context
+    if any(request.url.path.startswith(prefix) for prefix in skip_prefixes):
+        request.state.auth_type = "anonymous"
+        request.state.user_id = "anonymous_base_user"
+        response = await call_next(request)
+        return response
+    
+    if request.url.path in skip_paths:
         response = await call_next(request)
         return response
     
