@@ -52,8 +52,8 @@ def test_app(mock_memory_service):
         return response
 
     # Include routers
-    app.include_router(health.router, prefix="/health", tags=["health"])
-    app.include_router(chat.router, prefix="/v1/chat", tags=["chat"])
+    app.include_router(health.router, prefix="", tags=["health"])  # No prefix for health
+    app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
     app.include_router(elr.router, prefix="/v1/elr", tags=["elr"])
     app.include_router(metrics.router, prefix="/metrics", tags=["metrics"])
 
