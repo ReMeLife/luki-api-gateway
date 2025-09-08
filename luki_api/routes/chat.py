@@ -9,9 +9,50 @@ import asyncio
 from luki_api.config import settings
 from luki_api.clients.agent_client import agent_client, AgentChatRequest
 from luki_api.clients.memory_service import MemoryServiceClient, ELRQueryRequest
+from datetime import datetime
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+async def capture_conversation_elr(user_id: str, user_message: str, ai_response: str):
+    """Automatically capture conversation as ELR data - only for authenticated users"""
+    # Skip ELR capture for anonymous users
+    if user_id.startswith('anonymous_'):
+        logger.debug(f"Skipping ELR capture for anonymous user: {user_id}")
+        return
+    
+    try:
+        memory_client = MemoryServiceClient()
+        
+        elr_data = {
+            "user_id": user_id,
+            "content": f"User: {user_message}\nLUKi: {ai_response}",
+            "content_type": "CONVERSATION",
+            "sensitivity_level": "MEDIUM",
+            "timestamp": datetime.now().isoformat(),
+            "metadata": {
+                "source": "chat_widget",
+                "interaction_type": "conversation",
+                "authenticated": True
+            }
+        }
+        
+        # Call memory service ingestion endpoint
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{memory_client.base_url}/ingestion/elr",
+                json=elr_data,
+                timeout=5.0
+            )
+            if response.status_code == 200:
+                logger.info(f"Successfully captured ELR for authenticated user {user_id}")
+            else:
+                logger.warning(f"ELR capture failed with status {response.status_code}")
+                
+    except Exception as e:
+        logger.error(f"ELR capture error: {e}")
+        raise
 
 class ChatMessage(BaseModel):
     """Schema for chat messages in the LUKi conversation"""
@@ -135,21 +176,24 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
                 detail="Latest message must be from user"
             )
         
-        # Retrieve memory context from memory service
+        # Retrieve memory context from memory service - only for authenticated users
         memory_context = []
-        try:
-            memory_client = MemoryServiceClient()
-            query_request = ELRQueryRequest(
-                user_id=chat_request.user_id,
-                query=latest_message.content,  # Changed from query_text
-                k=5  # Changed from limit
-            )
-            memory_response = await memory_client.search_elr_items(query_request)
-            memory_context = memory_response.get("results", [])
-            logger.info(f"Retrieved {len(memory_context)} memory items for user {chat_request.user_id}")
-        except Exception as e:
-            logger.warning(f"Memory retrieval failed for user {chat_request.user_id}: {e}")
-            # Continue without memory context
+        if not chat_request.user_id.startswith('anonymous_'):
+            try:
+                memory_client = MemoryServiceClient()
+                query_request = ELRQueryRequest(
+                    user_id=chat_request.user_id,
+                    query=latest_message.content,  # Changed from query_text
+                    k=5  # Changed from limit
+                )
+                memory_response = await memory_client.search_elr_items(query_request)
+                memory_context = memory_response.get("results", [])
+                logger.info(f"Retrieved {len(memory_context)} memory items for authenticated user {chat_request.user_id}")
+            except Exception as e:
+                logger.warning(f"Memory retrieval failed for user {chat_request.user_id}: {e}")
+                # Continue without memory context
+        else:
+            logger.debug(f"Skipping memory retrieval for anonymous user: {chat_request.user_id}")
 
         # Prepare agent request with memory context
         agent_request = AgentChatRequest(
@@ -167,6 +211,17 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
         
         # Call the core agent
         agent_response = await agent_client.chat(agent_request)
+        
+        # Automatically capture conversation as ELR
+        try:
+            await capture_conversation_elr(
+                chat_request.user_id,
+                latest_message.content,
+                agent_response.response
+            )
+        except Exception as elr_error:
+            logger.warning(f"ELR capture failed for user {chat_request.user_id}: {elr_error}")
+            # Continue without failing the chat
         
         # Format response
         response_message = ChatMessage(
