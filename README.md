@@ -46,65 +46,47 @@ luki-api-gateway/
 ├── README.md
 ├── pyproject.toml
 ├── requirements.txt
-├── env.example                  # environment template (copy to .env)
+├── requirements-railway.txt     # railway deployment dependencies
+├── env.example                  # environment template
 ├── .env                         # actual environment file (gitignored)
-├── luki_api/                    # main package
+├── .railwayignore              # railway deployment exclusions
+├── .dockerignore               # docker build exclusions
+├── Dockerfile                  # container build configuration
+├── railway.toml                # railway deployment configuration
+├── Procfile                    # process definitions
+├── luki_api/                   # main package
 │   ├── __init__.py
-│   ├── config.py                # env vars, service URLs, rate limits
-│   ├── main.py                  # FastAPI app entry
+│   ├── config.py               # env vars, service URLs, rate limits
+│   ├── main.py                 # FastAPI app entry
 │   ├── auth/
 │   │   ├── __init__.py
-│   │   ├── api_key.py           # API key authentication
-│   │   ├── jwt.py               # JWT token handling
-│   │   └── rbac.py              # role-based access control
+│   │   ├── api_key.py          # API key authentication
+│   │   ├── jwt.py              # JWT token handling
+│   │   └── rbac.py             # role-based access control
 │   ├── middleware/
 │   │   ├── __init__.py
-│   │   ├── auth.py              # authentication middleware
-│   │   ├── logging.py           # structured logging
-│   │   ├── metrics.py           # metrics collection
-│   │   ├── rate_limit.py        # rate limiting
-│   │   └── tracing.py           # request tracing
+│   │   ├── auth.py             # authentication middleware
+│   │   ├── logging.py          # structured logging
+│   │   ├── rate_limit.py       # rate limiting
+│   │   └── tracing.py          # request tracing
 │   ├── routes/
 │   │   ├── __init__.py
-│   │   ├── chat.py              # /v1/chat endpoints
-│   │   ├── elr.py               # /v1/elr proxy routes
-│   │   ├── activities.py        # /v1/activities proxy (planned)
-│   │   ├── reports.py           # /v1/reports proxy (planned)
-│   │   ├── health.py            # /health endpoint
-│   │   └── metrics.py           # /metrics endpoint
-│   ├── clients/
-│   │   ├── __init__.py
-│   │   ├── agent_client.py      # LUKi core agent client
-│   │   ├── memory_service.py    # memory service client
-│   │   ├── cognitive_client.py  # cognitive module client (planned)
-│   │   ├── engagement_client.py # engagement module client (planned)
-│   │   └── reporting_client.py  # reporting module client (planned)
-│   ├── schemas/
-│   │   ├── __init__.py          # (planned)
-│   │   ├── chat.py              # request/response models (planned)
-│   │   ├── elr.py               # ELR models (planned)
-│   │   ├── activities.py        # activity models (planned)
-│   │   └── common.py            # shared models (planned)
-│   ├── models/
-│   │   └── errors.py            # error models and handling
-│   └── utils/
-│       ├── errors.py            # error mapping (planned)
-│       └── responses.py         # response utilities (planned)
-├── docker/
-│   └── Dockerfile               # container build (planned)
-├── scripts/
-│   ├── run_dev.sh               # bash development script
-│   └── run_dev_api_gateway.py   # python development script
-└── tests/
-    ├── integration/             # integration tests
-    └── unit/                    # unit tests (when added)
+│   │   ├── chat.py             # /v1/chat endpoints
+│   │   ├── elr.py              # /v1/elr proxy routes
+│   │   ├── health.py           # /health endpoint
+│   │   └── metrics.py          # /metrics endpoint
+│   └── clients/
+│       ├── __init__.py
+│       ├── agent_client.py     # LUKi core agent client
+│       └── memory_service.py   # memory service client
+└── scripts/                     # deployment and utility scripts
 ~~~
 
 ---
 
 ## 5. Quick Start  
 ~~~bash
-git clone https://github.com/your-org/luki-api-gateway.git
+git clone git@github.com:REMELife/luki-api-gateway.git
 cd luki-api-gateway
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
