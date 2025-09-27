@@ -38,7 +38,7 @@ app.middleware("http")(rate_limit.rate_limit_middleware)
 
 # Include routers
 app.include_router(health.router, prefix="", tags=["health"])  # No prefix for health
-app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
+app.include_router(chat.router, prefix="/api", tags=["chat"])
 app.include_router(elr.router, prefix="/v1/elr", tags=["elr"])
 app.include_router(metrics.router, prefix="/metrics", tags=["metrics"])
 
