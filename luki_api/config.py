@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from typing import List, Optional
+import os
 
 class Settings(BaseSettings):
     # API metadata
@@ -7,11 +8,11 @@ class Settings(BaseSettings):
     
     # Server settings
     HOST: str = "0.0.0.0"
-    PORT: int = 8081
-    DEBUG: bool = True  # Enable debug for development
+    PORT: int = int(os.getenv("PORT", 8080))  # Railway uses PORT env var
+    DEBUG: bool = False  # Disable debug for production
     
     # CORS settings
-    ALLOWED_ORIGINS: List[str] = ["*"]
+    ALLOWED_ORIGINS: List[str] = ["https://yourdomain.com", "https://luki-ai.io", "http://localhost:3000", "https://chat-interface-ai.netlify.app"]
     
     # Auth settings
     JWT_SECRET_KEY: Optional[str] = None
@@ -22,13 +23,13 @@ class Settings(BaseSettings):
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_REQUESTS_PER_MINUTE: int = 100  # Increased for development
     
-    # Memory service settings
-    MEMORY_SERVICE_URL: str = "http://localhost:8002"  # Memory service port
+    # Memory service settings - Railway deployment URLs
+    MEMORY_SERVICE_URL: str = os.getenv("LUKI_MEMORY_SERVICE_URL", "http://localhost:8002")
     MEMORY_SERVICE_TIMEOUT: int = 30
     
-    # Agent service settings (LUKi Core Agent with Together AI)
-    AGENT_SERVICE_URL: str = "http://localhost:9000"
-    AGENT_SERVICE_TIMEOUT: int = 120  # Longer timeout for LLM responses
+    # Agent service settings - Railway deployment URLs
+    AGENT_SERVICE_URL: str = os.getenv("LUKI_CORE_AGENT_URL", "http://localhost:9000")
+    AGENT_SERVICE_TIMEOUT: int = 240  # Extended timeout to align with core-agent structured output
     
     # Redis settings (for rate limiting and session storage)
     REDIS_URL: str = "redis://localhost:6379"
