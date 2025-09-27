@@ -1,3 +1,4 @@
+
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -5,6 +6,7 @@ from typing import Optional, List, Dict, Any
 import httpx
 import logging
 import json
+import re
 import asyncio
 from luki_api.config import settings
 from luki_api.clients.agent_client import agent_client, AgentChatRequest
@@ -18,7 +20,7 @@ logger = logging.getLogger(__name__)
 async def capture_conversation_elr(user_id: str, user_message: str, ai_response: str):
     """Automatically capture conversation as ELR data - only for authenticated users"""
     # Skip ELR capture for anonymous users
-    if user_id.startswith('anonymous_'):
+    if (not user_id) or user_id == 'anonymous_base_user' or user_id.startswith('anonymous_'):
         logger.debug(f"Skipping ELR capture for anonymous user: {user_id}")
         return
     
@@ -84,6 +86,10 @@ class ChatRequest(BaseModel):
         default=None,
         description="Optional session identifier for continuing conversations"
     )
+    client_tag: Optional[str] = Field(
+        default=None,
+        description="Optional tag indicating client source (e.g., luki_taster_widget)"
+    )
     
     class Config:
         schema_extra = {
@@ -127,7 +133,7 @@ class ChatResponse(BaseModel):
             }
         }
 
-@router.post("", 
+@router.post("/chat", 
          response_model=ChatResponse,
          status_code=status.HTTP_200_OK,
          summary="Chat with LUKi Agent",
@@ -176,24 +182,46 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
                 detail="Latest message must be from user"
             )
         
-        # Retrieve memory context from memory service - only for authenticated users
+        # Determine anonymity across all cases
+        def is_anonymous(uid: Optional[str], client_tag: Optional[str]) -> bool:
+            return (not uid) or uid == 'anonymous_base_user' or uid.startswith('anonymous_') or (client_tag == 'luki_taster_widget')
+
+        # Retrieve memory context from memory service
         memory_context = []
-        if not chat_request.user_id.startswith('anonymous_'):
+        tasks = []
+        memory_client = None
+        # User-specific search (only if authenticated)
+        if not is_anonymous(chat_request.user_id, chat_request.client_tag):
             try:
                 memory_client = MemoryServiceClient()
-                query_request = ELRQueryRequest(
+                user_query = ELRQueryRequest(
                     user_id=chat_request.user_id,
-                    query=latest_message.content,  # Changed from query_text
-                    k=5  # Changed from limit
+                    query=latest_message.content,
+                    k=5
                 )
-                memory_response = await memory_client.search_elr_items(query_request)
-                memory_context = memory_response.get("results", [])
-                logger.info(f"Retrieved {len(memory_context)} memory items for authenticated user {chat_request.user_id}")
+                tasks.append(memory_client.search_elr_items(user_query))
             except Exception as e:
-                logger.warning(f"Memory retrieval failed for user {chat_request.user_id}: {e}")
-                # Continue without memory context
+                logger.warning(f"Unable to init user memory query: {e}")
         else:
-            logger.debug(f"Skipping memory retrieval for anonymous user: {chat_request.user_id}")
+            logger.debug(f"Skipping user memory retrieval for anonymous user: {chat_request.user_id}")
+
+
+        # Run queries concurrently and combine results
+        if tasks:
+            try:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for idx, res in enumerate(results):
+                    if isinstance(res, Exception):
+                        logger.warning(f"Memory query {idx} failed: {res}")
+                        continue
+                    if isinstance(res, dict):
+                        items = res.get("results", [])
+                        memory_context.extend(items)
+                    else:
+                        logger.warning(f"Memory query {idx} returned non-dict result: {type(res).__name__}")
+                logger.info(f"Retrieved total {len(memory_context)} user memory items")
+            except Exception as e:
+                logger.warning(f"Memory retrieval gather failed: {e}")
 
         # Prepare agent request with memory context
         agent_request = AgentChatRequest(
@@ -212,21 +240,35 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
         # Call the core agent
         agent_response = await agent_client.chat(agent_request)
         
-        # Automatically capture conversation as ELR
-        try:
-            await capture_conversation_elr(
-                chat_request.user_id,
-                latest_message.content,
-                agent_response.response
-            )
-        except Exception as elr_error:
-            logger.warning(f"ELR capture failed for user {chat_request.user_id}: {elr_error}")
-            # Continue without failing the chat
+        # Automatically capture conversation as ELR - only for authenticated users
+        if not is_anonymous(chat_request.user_id, chat_request.client_tag):
+            try:
+                await capture_conversation_elr(
+                    chat_request.user_id,
+                    latest_message.content,
+                    agent_response.response
+                )
+            except Exception as elr_error:
+                logger.warning(f"ELR capture failed for user {chat_request.user_id}: {elr_error}")
+                # Continue without failing the chat
         
-        # Format response
+        # Defensively extract final text if core returns JSON (e.g., {thought, final_response})
+        raw_content = (agent_response.response or "").strip()
+        final_text = raw_content
+        try:
+            data = json.loads(raw_content)
+            if isinstance(data, dict) and 'final_response' in data:
+                final_text = (data.get('final_response') or "").strip()
+        except Exception:
+            m = re.search(r'"final_response"\s*:\s*"(.*?)"', raw_content, flags=re.DOTALL)
+            if m:
+                final_text = m.group(1).strip()
+        # Sanitize any leaked markers
+        final_text = re.sub(r'(?im)^(thought|analysis|reflection)\s*:\s*.*$', '', final_text).strip()
+
         response_message = ChatMessage(
             role="assistant",
-            content=agent_response.response
+            content=final_text
         )
         
         return ChatResponse(
@@ -239,10 +281,18 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
         # Re-raise HTTP exceptions
         raise
     except httpx.HTTPStatusError as e:
-        logger.error(f"Agent service error: {e.response.status_code}")
+        logger.error(f"Agent service error: {e.response.status_code} - {e.response.text}")
+        detail = "Agent service encountered an error."
+        try:
+            # Try to parse the detail from the agent's response
+            error_detail = e.response.json().get("detail")
+            if error_detail:
+                detail = error_detail
+        except Exception:
+            pass  # Fallback to generic message
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Agent service unavailable"
+            detail=detail
         )
     except httpx.RequestError as e:
         logger.error(f"Agent service connection error: {e}")
@@ -257,7 +307,7 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
             detail="Internal server error"
         )
 
-@router.post("/stream",
+@router.post("/chat/stream",
          summary="Streaming Chat with LUKi Agent",
          description="Send messages to the LUKi agent and receive streaming responses for real-time interaction",
          responses={
@@ -301,21 +351,43 @@ async def chat_stream_endpoint(chat_request: ChatRequest, request: Request):
                 yield f"data: {json.dumps({'error': 'Latest message must be from user'})}\n\n"
                 return
             
-            # Retrieve memory context from memory service for streaming
+            # Retrieve memory context from memory service for streaming - only if authenticated
+            def is_anonymous(uid: Optional[str], client_tag: Optional[str]) -> bool:
+                return (not uid) or uid == 'anonymous_base_user' or uid.startswith('anonymous_') or (client_tag == 'luki_taster_widget')
+
             memory_context = []
-            try:
-                memory_client = MemoryServiceClient()
-                query_request = ELRQueryRequest(
-                    user_id=chat_request.user_id,
-                    query=latest_message.content,  # Changed from query_text
-                    k=5  # Changed from limit
-                )
-                memory_response = await memory_client.search_elr_items(query_request)
-                memory_context = memory_response.get("results", [])
-                logger.info(f"Retrieved {len(memory_context)} memory items for streaming user {chat_request.user_id}")
-            except Exception as e:
-                logger.warning(f"Memory retrieval failed for streaming user {chat_request.user_id}: {e}")
-                # Continue without memory context
+            tasks = []
+            memory_client = None
+            if not is_anonymous(chat_request.user_id, chat_request.client_tag):
+                try:
+                    memory_client = MemoryServiceClient()
+                    user_query = ELRQueryRequest(
+                        user_id=chat_request.user_id,
+                        query=latest_message.content,
+                        k=5
+                    )
+                    tasks.append(memory_client.search_elr_items(user_query))
+                except Exception as e:
+                    logger.warning(f"Unable to init user memory query (stream): {e}")
+            else:
+                logger.debug(f"Skipping user memory retrieval for anonymous streaming user: {chat_request.user_id}")
+
+
+            if tasks:
+                try:
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    for idx, res in enumerate(results):
+                        if isinstance(res, Exception):
+                            logger.warning(f"Memory query (stream) {idx} failed: {res}")
+                            continue
+                        if isinstance(res, dict):
+                            items = res.get("results", [])
+                            memory_context.extend(items)
+                        else:
+                            logger.warning(f"Memory query (stream) {idx} returned non-dict result: {type(res).__name__}")
+                    logger.info(f"Retrieved total {len(memory_context)} user memory items for streaming")
+                except Exception as e:
+                    logger.warning(f"Memory retrieval gather (stream) failed: {e}")
 
             # Prepare agent request with memory context
             agent_request = AgentChatRequest(
@@ -331,9 +403,10 @@ async def chat_stream_endpoint(chat_request: ChatRequest, request: Request):
                 }
             )
             
-            # Stream response from agent
+            # Stream response directly from agent; sanitization is handled by the core agent.
             async for token in agent_client.chat_stream(agent_request):
-                yield f"data: {json.dumps({'token': token})}\n\n"
+                if token:
+                    yield f"data: {json.dumps({'token': token})}\n\n"
             
             # Send completion signal
             yield f"data: {json.dumps({'done': True})}\n\n"
@@ -350,10 +423,9 @@ async def chat_stream_endpoint(chat_request: ChatRequest, request: Request):
     
     return StreamingResponse(
         generate_stream(),
-        media_type="text/plain",
+        media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Content-Type": "text/event-stream"
+            "Connection": "keep-alive"
         }
     )
