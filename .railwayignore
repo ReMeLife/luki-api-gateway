@@ -1,0 +1,35 @@
+# Railway Ignore File
+# This file tells Railway what to exclude from deployment
+# Unlike .gitignore, we want to INCLUDE the gitignored files for deployment
+
+# Standard exclusions for Railway
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+.env.local
+.env.development
+.env.test
+
+# Exclude development files
+.vscode/
+.idea/
+*.log
+logs/
+
+# Exclude test and debug files
+test_*.py
+tests/
+scripts/run_dev*
+
+# Exclude build artifacts
+*.egg-info/
+build/
+dist/
+
+# Keep all the git ignored files that are needed for deployment
+# (by NOT listing them here, they will be included)
+
+# No sensitive gitignored files need to be force-included for this service
+# All functional code is already tracked by git
