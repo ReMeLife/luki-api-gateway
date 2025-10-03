@@ -255,10 +255,13 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
         # Defensively extract final text if core returns JSON (e.g., {thought, final_response})
         raw_content = (agent_response.response or "").strip()
         final_text = raw_content
+        web_search_used = False
         try:
             data = json.loads(raw_content)
             if isinstance(data, dict) and 'final_response' in data:
                 final_text = (data.get('final_response') or "").strip()
+                # Capture web_search_used metadata
+                web_search_used = data.get('web_search_used', False)
         except Exception:
             m = re.search(r'"final_response"\s*:\s*"(.*?)"', raw_content, flags=re.DOTALL)
             if m:
@@ -271,10 +274,14 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
             content=final_text
         )
         
+        # Include web_search_used in metadata
+        response_metadata = agent_response.metadata or {}
+        response_metadata['web_search_used'] = web_search_used
+        
         return ChatResponse(
             message=response_message,
             session_id=agent_response.session_id,
-            metadata=agent_response.metadata
+            metadata=response_metadata
         )
         
     except HTTPException:
