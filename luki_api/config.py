@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     
     # Rate limiting settings
     RATE_LIMIT_ENABLED: bool = True
-    RATE_LIMIT_REQUESTS_PER_MINUTE: int = 100  # Increased for development
+    RATE_LIMIT_REQUESTS_PER_MINUTE: int = 20  # Production rate limit for cost protection
     
     # Memory service settings - Railway deployment URLs
     MEMORY_SERVICE_URL: str = os.getenv("LUKI_MEMORY_SERVICE_URL", "http://localhost:8002")
@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     AGENT_SERVICE_TIMEOUT: int = 240  # Extended timeout to align with core-agent structured output
     
     # Redis settings (for rate limiting and session storage)
-    REDIS_URL: str = "redis://localhost:6379"
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
     
     # Streaming settings
     ENABLE_STREAMING: bool = True
