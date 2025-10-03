@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from luki_api.routes import chat, elr, health, metrics
+from luki_api.routes import chat, elr, health, metrics, conversation
 from luki_api.middleware import auth, rate_limit, logging, metrics as metrics_middleware
 from luki_api.config import settings
 from luki_api.clients.agent_client import agent_client
@@ -39,6 +39,7 @@ app.middleware("http")(rate_limit.rate_limit_middleware)
 # Include routers
 app.include_router(health.router, prefix="", tags=["health"])  # No prefix for health
 app.include_router(chat.router, prefix="/api", tags=["chat"])
+app.include_router(conversation.router, prefix="/api", tags=["conversation"])
 app.include_router(elr.router, prefix="/v1/elr", tags=["elr"])
 app.include_router(metrics.router, prefix="/metrics", tags=["metrics"])
 
