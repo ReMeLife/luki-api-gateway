@@ -28,12 +28,13 @@ class ConversationHistoryResponse(BaseModel):
     total_count: int
 
 
-@router.get("/conversation/history/{user_id}",
+@router.get("/conversation/history/{user_id}/{conversation_id}",
            response_model=ConversationHistoryResponse,
            summary="Get Conversation History",
            description="Retrieve conversation history for an authenticated user from ELR")
 async def get_conversation_history(
     user_id: str,
+    conversation_id: str,
     limit: int = 50,
     offset: int = 0
 ):
@@ -58,17 +59,16 @@ async def get_conversation_history(
     
     try:
         memory_client = MemoryServiceClient()
+        from luki_api.clients.memory_service import ELRQueryRequest
         
         # Query memory service for conversation ELR items
-        # The memory service should filter by content_type="CONVERSATION" and user_id
-        search_request = {
-            "user_id": user_id,
-            "query": "",  # Empty query to get all conversations
-            "k": limit,
-            "filters": {
-                "content_type": "CONVERSATION"
-            }
-        }
+        # WORKAROUND: Memory service requires non-empty query string
+        # Also cap limit at 50 (memory service max)
+        search_request = ELRQueryRequest(
+            user_id=user_id,
+            query=" ",  # Single space to bypass validation but match everything
+            k=min(limit, 50)  # Memory service max is 50
+        )
         
         # Call memory service to get conversation ELR items
         result = await memory_client.search_elr_items(search_request)
@@ -103,6 +103,35 @@ async def get_conversation_history(
                         timestamp=timestamp
                     ))
         
+        # If no messages from Memory Service, try fetching from Supabase directly
+        if not messages:
+            logger.info(f"No ELR messages found, checking Supabase directly for user {user_id}")
+            try:
+                from supabase import create_client
+                import os
+                
+                SUPABASE_URL = os.getenv("SUPABASE_URL")
+                SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+                
+                if SUPABASE_URL and SUPABASE_KEY:
+                    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+                    
+                    # Get messages for the specific conversation
+                    msg_response = supabase.table("messages")\
+                        .select("*")\
+                        .eq("conversation_id", conversation_id)\
+                        .order("created_at")\
+                        .execute()
+                    
+                    for msg in msg_response.data:
+                        messages.append(ConversationMessage(
+                            role=msg["role"],
+                            content=msg["content"],
+                            timestamp=msg["created_at"]
+                        ))
+            except Exception as fallback_error:
+                logger.warning(f"Fallback to Supabase failed: {fallback_error}")
+        
         # Sort by timestamp (oldest first for proper conversation flow)
         messages.sort(key=lambda m: m.timestamp)
         
@@ -120,6 +149,84 @@ async def get_conversation_history(
         
     except Exception as e:
         logger.error(f"Error retrieving conversation history for user {user_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve conversation history: {str(e)}"
+        )
+
+
+@router.get("/conversation/history/{user_id}",
+           response_model=ConversationHistoryResponse,
+           summary="Get All Conversation History",
+           description="Retrieve all conversation history for an authenticated user")
+async def get_all_conversation_history(
+    user_id: str,
+    limit: int = 50,
+    offset: int = 0
+):
+    """
+    Get all conversation history for a user (backward compatibility).
+    This merges all conversations into one history.
+    """
+    # Validate user is not anonymous
+    if not user_id or user_id == 'anonymous_base_user' or user_id.startswith('anonymous_'):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Conversation history not available for anonymous users"
+        )
+    
+    messages = []
+    try:
+        # Get from Supabase directly
+        from supabase import create_client
+        import os
+        
+        SUPABASE_URL = os.getenv("SUPABASE_URL")
+        SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        
+        if SUPABASE_URL and SUPABASE_KEY:
+            supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            
+            # Get all conversations for user
+            conv_response = supabase.table("conversations")\
+                .select("id")\
+                .eq("user_id", user_id)\
+                .order("updated_at", desc=True)\
+                .execute()
+            
+            if conv_response.data:
+                # Get messages from recent conversations
+                for conv in conv_response.data[:5]:  # Limit to recent 5 conversations
+                    msg_response = supabase.table("messages")\
+                        .select("*")\
+                        .eq("conversation_id", conv["id"])\
+                        .order("created_at")\
+                        .execute()
+                    
+                    for msg in msg_response.data:
+                        messages.append(ConversationMessage(
+                            role=msg["role"],
+                            content=msg["content"],
+                            timestamp=msg["created_at"]
+                        ))
+        
+        # Sort by timestamp
+        messages.sort(key=lambda m: m.timestamp)
+        
+        # Apply offset and limit
+        total_count = len(messages)
+        messages = messages[offset:offset + limit]
+        
+        logger.info(f"Retrieved {len(messages)} total messages for user {user_id}")
+        
+        return ConversationHistoryResponse(
+            user_id=user_id,
+            messages=messages,
+            total_count=total_count
+        )
+        
+    except Exception as e:
+        logger.error(f"Error retrieving all conversation history for user {user_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve conversation history: {str(e)}"
