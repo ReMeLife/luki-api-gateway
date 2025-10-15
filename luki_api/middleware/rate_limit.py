@@ -29,15 +29,25 @@ async def get_redis():
 async def rate_limit_middleware(request: Request, call_next):
     """
     Rate limiting middleware that limits requests per user/IP using Redis
+    Higher limits for authenticated users to support background polling.
     """
-    if not settings.RATE_LIMIT_ENABLED:
+    # Skip rate limiting for OPTIONS preflight requests
+    if request.method == "OPTIONS":
         return await call_next(request)
         
+    if not settings.RATE_LIMIT_ENABLED:
+        return await call_next(request)
+    
+    # Check if user is authenticated (has valid auth in request state from auth middleware)
+    is_authenticated = hasattr(request.state, 'auth_type') and request.state.auth_type in ['supabase_jwt', 'api_key']
+    
     # Get API key from request if available (for per-API-key limits)
     api_key = request.headers.get(settings.API_KEY_HEADER)
     
-    # Get client identifier (IP address or API key)
-    if api_key:
+    # Get client identifier (IP address or API key or user_id)
+    if is_authenticated and hasattr(request.state, 'user_id'):
+        client_id = f"user:{request.state.user_id}"
+    elif api_key:
         client_id = f"apikey:{api_key}"
     elif request.client is not None:
         client_id = f"ip:{request.client.host}"
@@ -57,8 +67,11 @@ async def rate_limit_middleware(request: Request, call_next):
             # Rate limit key in Redis
             key = f"rate_limit:{client_id}"
             
-            # Get limit for this client (could be customized per API key)
-            rate_limit = settings.RATE_LIMIT_REQUESTS_PER_MINUTE
+            # Get limit for this client - very high for authenticated users
+            # Authenticated users: 10,000/min (essentially unlimited - ~166 req/sec)
+            # Anonymous users: 100/min (bot protection)
+            # Polling doesn't use Together AI credits (just database queries)
+            rate_limit = 10000 if is_authenticated else settings.RATE_LIMIT_REQUESTS_PER_MINUTE
             
             # Use Redis sorted set for time-based expiry
             # Add current timestamp to sorted set
@@ -88,13 +101,13 @@ async def rate_limit_middleware(request: Request, call_next):
     else:
         # Fallback to in-memory rate limiting when Redis is unavailable
         # This is less scalable but provides a backup mechanism
-        await in_memory_rate_limit(client_id, current_time)
+        await in_memory_rate_limit(client_id, current_time, is_authenticated)
     
     # Continue with request
     response = await call_next(request)
     return response
 
-async def in_memory_rate_limit(client_id: str, current_time: float):
+async def in_memory_rate_limit(client_id: str, current_time: float, is_authenticated: bool = False):
     """
     In-memory rate limiting as fallback when Redis is unavailable
     """
@@ -117,8 +130,9 @@ async def in_memory_rate_limit(client_id: str, current_time: float):
         if current_time - req_time < time_window
     ]
     
-    # Check if rate limit exceeded
-    if len(client_data["requests"]) >= settings.RATE_LIMIT_REQUESTS_PER_MINUTE:
+    # Check if rate limit exceeded - very high for authenticated users
+    rate_limit = 10000 if is_authenticated else settings.RATE_LIMIT_REQUESTS_PER_MINUTE
+    if len(client_data["requests"]) >= rate_limit:
         logger.warning(f"Rate limit exceeded for client: {client_id}")
         raise HTTPException(
             status_code=429,
