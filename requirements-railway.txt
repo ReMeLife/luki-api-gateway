@@ -1,4 +1,5 @@
 # Railway-optimized requirements for LUKi API Gateway
+# REBUILD: 2025-10-03 13:22 - Fixed empty query validation
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
@@ -6,12 +7,13 @@ pydantic-settings==2.1.0
 python-multipart==0.0.6
 
 # HTTP client for service communication
-httpx==0.25.0
+httpx==0.24.1
 aiofiles==23.2.1
 
 # Authentication and security
 python-jose[cryptography]==3.3.0
 cryptography==41.0.7
+supabase==2.0.0
 
 # Rate limiting and caching
 slowapi==0.1.9
