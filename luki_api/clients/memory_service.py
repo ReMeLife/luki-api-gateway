@@ -1,13 +1,14 @@
-"""
-Memory Service HTTP Client
+"""Memory Service HTTP Client
 
 This module provides a client for interacting with the luki-memory-service API.
 """
 import httpx
 import logging
 import time
+import asyncio
 from typing import Dict, List, Optional, Any, Union
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from datetime import datetime, timedelta
 from luki_api.config import settings
 # Metrics tracking temporarily disabled to avoid initialization issues
 # from luki_api.middleware.metrics import (
@@ -17,6 +18,13 @@ from luki_api.config import settings
 # )
 
 logger = logging.getLogger(__name__)
+
+# Service token cache (module-level)
+_token_cache = {
+    "token": None,
+    "expires_at": None,
+    "lock": asyncio.Lock()
+}
 
 class ELRItemRequest(BaseModel):
     """Schema for ELR item requests"""
@@ -28,7 +36,7 @@ class ELRItemRequest(BaseModel):
 class ELRQueryRequest(BaseModel):
     """Schema for ELR query requests"""
     user_id: str
-    query: str  # Changed from query_text to match Memory Service API
+    query: str = Field(default="", min_length=0)  # Allow empty queries to fetch all memories
     k: Optional[int] = 10  # Changed from limit to match Memory Service API
 
 class MemoryServiceError(Exception):
@@ -52,6 +60,44 @@ class MemoryServiceClient:
         """
         self.base_url = base_url or settings.MEMORY_SERVICE_URL
         self.timeout = timeout
+    
+    async def _get_cached_service_token(self) -> Optional[str]:
+        """Get service token with caching to reduce API calls
+        
+        Token is cached for 4 minutes (expires in 5 minutes from Memory Service).
+        This reduces auth token generation from every request to ~once per 4 minutes.
+        
+        Returns:
+            Service token string or None if generation fails
+        """
+        async with _token_cache["lock"]:
+            # Check if cached token is still valid
+            if _token_cache["token"] and _token_cache["expires_at"]:
+                if datetime.now() < _token_cache["expires_at"]:
+                    logger.debug("Using cached service token")
+                    return _token_cache["token"]
+            
+            # Generate new token
+            try:
+                logger.info("Generating new service token (cache expired or missing)")
+                async with httpx.AsyncClient() as auth_client:
+                    token_response = await auth_client.post(
+                        f"{self.base_url.rstrip('/')}/auth/service-token",
+                        timeout=self.timeout
+                    )
+                    if token_response.status_code == 200:
+                        token_data = token_response.json()
+                        token = token_data["access_token"]
+                        
+                        # Cache token for 4 minutes (Memory Service tokens expire in 5 minutes)
+                        _token_cache["token"] = token
+                        _token_cache["expires_at"] = datetime.now() + timedelta(minutes=4)
+                        logger.info("Service token cached successfully")
+                        
+                        return token
+            except Exception as e:
+                logger.error(f"Failed to generate service token: {e}")
+                return None
         
     async def _make_request(
         self, method: str, endpoint: str, 
@@ -82,18 +128,12 @@ class MemoryServiceClient:
         # track_memory_service_request(method.upper(), endpoint)
         start_time = time.time()
         
-        # Create service token for authentication
+        # Create service token for authentication (with caching)
         headers = {}
         try:
-            # Get service token from memory service
-            async with httpx.AsyncClient() as auth_client:
-                token_response = await auth_client.post(
-                    f"{self.base_url.rstrip('/')}/auth/service-token",
-                    timeout=self.timeout
-                )
-                if token_response.status_code == 200:
-                    token_data = token_response.json()
-                    headers["Authorization"] = f"Bearer {token_data['access_token']}"
+            token = await self._get_cached_service_token()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
         except Exception as e:
             logger.warning(f"Failed to get service token: {e}. Proceeding without auth.")
         
@@ -200,9 +240,10 @@ class MemoryServiceClient:
         Returns:
             Deletion confirmation
         """
-        return await self._make_request("delete", f"/api/elr/items/{item_id}")
+        # Call the new delete endpoint in Memory Service
+        return await self._make_request("delete", f"/delete/memory/{item_id}")
     
-    async def search_elr_items(self, query: ELRQueryRequest) -> Dict[str, Any]:
+    async def search_elr_items(self, query: Union[ELRQueryRequest, Dict[str, Any]]) -> Dict[str, Any]:
         """Search for ELR items
         
         Args:
@@ -211,4 +252,9 @@ class MemoryServiceClient:
         Returns:
             Search results including matched items
         """
-        return await self._make_request("post", "/search/memories", data=query)
+        # Convert to dict if it's a Pydantic model
+        if isinstance(query, ELRQueryRequest):
+            data = query.model_dump()
+        else:
+            data = query
+        return await self._make_request("post", "/search/memories", data=data)
