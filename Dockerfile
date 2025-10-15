@@ -1,4 +1,5 @@
 # Multi-stage build for LUKi API Gateway
+# REBUILD: Fixed empty query validation - 2025-10-03 13:21
 FROM python:3.11-slim as builder
 
 # Install build dependencies
@@ -31,6 +32,8 @@ WORKDIR /app
 
 # Copy application code
 COPY . .
+# Force rebuild trigger file
+COPY FORCE_REBUILD.txt /app/FORCE_REBUILD.txt
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash app \
