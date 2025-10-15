@@ -11,8 +11,16 @@ class Settings(BaseSettings):
     PORT: int = int(os.getenv("PORT", 8080))  # Railway uses PORT env var
     DEBUG: bool = False  # Disable debug for production
     
-    # CORS settings
-    ALLOWED_ORIGINS: List[str] = ["https://yourdomain.com", "https://luki-ai.io", "http://localhost:3000", "https://chat-interface-ai.netlify.app"]
+    # CORS settings - can be overridden via LUKI_API_ALLOWED_ORIGINS env var (comma-separated)
+    ALLOWED_ORIGINS: str = os.getenv(
+        "LUKI_API_ALLOWED_ORIGINS",
+        "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,https://chat-interface-ai.netlify.app,https://remelife.com,https://www.remelife.com,https://remelife-main.netlify.app,*"
+    )
+    
+    @property
+    def allowed_origins_list(self) -> List[str]:
+        """Parse ALLOWED_ORIGINS string into list"""
+        return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",")]
     
     # Auth settings
     JWT_SECRET_KEY: Optional[str] = None
