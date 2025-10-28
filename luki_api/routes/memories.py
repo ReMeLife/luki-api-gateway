@@ -161,30 +161,31 @@ async def create_memory(user_id: str, memory: Memory):
 
 
 @router.delete("/items/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_memory(memory_id: str, user_id: str):
+async def delete_memory(memory_id: str):
     """
     Delete a memory.
     
     Parameters:
     - memory_id: The memory ID to delete
-    - user_id: The user ID (for authorization)
     
     Returns:
     - 204 No Content on success
     """
-    logger.info(f"Deleting memory {memory_id} for user {user_id}")
+    logger.info(f"🗑️ Deleting memory: {memory_id}")
     
     try:
-        # TODO: Implement actual deletion in memory service
-        # For now, return success
-        # The memory service needs a delete endpoint
+        memory_client = MemoryServiceClient()
         
-        logger.warning(f"Memory deletion not fully implemented yet - memory {memory_id} marked for deletion")
+        # Call memory service to delete the item
+        result = await memory_client.delete_elr_item(memory_id)
+        
+        logger.info(f"✅ Memory {memory_id} deleted successfully from memory service")
+        logger.info(f"Delete result: {result}")
         
         return None
         
     except Exception as e:
-        logger.error(f"Failed to delete memory: {str(e)}")
+        logger.error(f"❌ Failed to delete memory {memory_id}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete memory: {str(e)}"
