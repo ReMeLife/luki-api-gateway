@@ -161,7 +161,9 @@ async def options_conversation_messages(request: Request, user_id: str, conversa
             "http://localhost:3000",
             "http://localhost:3001",
             "https://remelife.com",
-            "https://www.remelife.com"
+            "https://www.remelife.com",
+            "https://remelife.app",
+            "https://www.remelife.app"
         ] else "https://chat-interface-ai.netlify.app",
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
         "Access-Control-Allow-Headers": "*",  # Allow ALL headers
