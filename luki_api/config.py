@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     # CORS settings - can be overridden via LUKI_API_ALLOWED_ORIGINS env var (comma-separated)
     ALLOWED_ORIGINS: str = os.getenv(
         "LUKI_API_ALLOWED_ORIGINS",
-        "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,https://chat-interface-ai.netlify.app,https://remelife.com,https://www.remelife.com,https://remelife-main.netlify.app,*"
+        "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,https://chat-interface-ai.netlify.app,https://remelife.com,https://www.remelife.com,https://remelife.app,https://www.remelife.app,https://remelife-main.netlify.app,*"
     )
     
     @property
