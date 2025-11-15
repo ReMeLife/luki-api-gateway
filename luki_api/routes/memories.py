@@ -44,6 +44,18 @@ class MemoriesListResponse(BaseModel):
     user_id: str
 
 
+class UserMemoryProfile(BaseModel):
+    """Aggregated memory profile for a user"""
+    user_id: str
+    total_memories: int
+    total_chunks: int
+    content_type_breakdown: Dict[str, int]
+    sensitivity_breakdown: Dict[str, int]
+    earliest_memory: Optional[str] = None
+    latest_memory: Optional[str] = None
+    storage_size_mb: float
+
+
 _redis_client = None
 _in_memory_cache: Dict[str, Dict[str, Any]] = {}
 _CACHE_TTL_SECONDS = 60
@@ -168,6 +180,24 @@ async def get_user_memories(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch memories: {str(e)}"
+        )
+
+
+@router.get("/users/{user_id}/profile", response_model=UserMemoryProfile)
+async def get_user_memory_profile(user_id: str):
+    """Get aggregated memory profile for a user"""
+    logger.info(f"Fetching memory profile for user: {user_id}")
+    try:
+        memory_client = MemoryServiceClient()
+        stats = await memory_client._make_request("get", f"/users/{user_id}/profile")
+        if isinstance(stats, dict) and "user_id" not in stats:
+            stats["user_id"] = user_id
+        return UserMemoryProfile(**stats)
+    except Exception as e:
+        logger.error(f"Failed to fetch memory profile: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch memory profile: {str(e)}"
         )
 
 
