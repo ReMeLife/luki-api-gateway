@@ -63,6 +63,13 @@ MEMORY_SERVICE_ERROR_COUNT = Counter(
     ['method', 'endpoint', 'error_type']
 )
 
+# High-level ELR/memory operations at the API gateway
+ELR_GATEWAY_REQUEST_COUNT = Counter(
+    'elr_gateway_requests_total',
+    'Total number of ELR/memory requests through the API gateway',
+    ['operation']
+)
+
 # Track active sessions
 ACTIVE_SESSIONS = Gauge(
     'active_user_sessions',
@@ -145,3 +152,8 @@ def track_session_start() -> None:
 def track_session_end() -> None:
     """Track when a user session ends"""
     ACTIVE_SESSIONS.dec()
+
+
+def track_elr_gateway_operation(operation: str) -> None:
+    """Track a high-level ELR/memory operation at the gateway"""
+    ELR_GATEWAY_REQUEST_COUNT.labels(operation=operation).inc()

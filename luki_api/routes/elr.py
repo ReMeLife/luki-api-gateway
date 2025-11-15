@@ -9,6 +9,7 @@ from luki_api.clients.memory_service import (
     ELRItemRequest,
     ELRQueryRequest
 )
+from luki_api.middleware.metrics import track_elr_gateway_operation
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -108,6 +109,7 @@ async def get_elr_items(user_id: str, request: Request,
     - **HTTPException 500**: If memory service encounters an error
     """
     logger.info(f"Retrieving ELR items for user: {user_id}")
+    track_elr_gateway_operation("elr_get_items")
     
     try:
         # Call the memory service
@@ -162,6 +164,7 @@ async def create_elr_item(item: ELRItem, request: Request,
     ```
     """
     logger.info(f"Creating ELR item for user: {item.user_id}")
+    track_elr_gateway_operation("elr_create_item")
     
     try:
         # Create ELRItemRequest from ELRItem
@@ -217,6 +220,7 @@ async def update_elr_item(item_id: str, item: ELRItem, request: Request,
     - **HTTPException 500**: If memory service encounters an error
     """
     logger.info(f"Updating ELR item: {item_id}")
+    track_elr_gateway_operation("elr_update_item")
     
     try:
         # Create ELRItemRequest from ELRItem
@@ -268,6 +272,7 @@ async def delete_elr_item(item_id: str, request: Request,
     - **HTTPException 500**: If memory service encounters an error
     """
     logger.info(f"Deleting ELR item: {item_id}")
+    track_elr_gateway_operation("elr_delete_item")
     
     try:
         # Call the memory service
@@ -321,6 +326,7 @@ async def search_elr_items(query: ELRQuery, request: Request,
     ```
     """
     logger.info(f"Searching ELR items for user: {query.user_id}")
+    track_elr_gateway_operation("elr_search_items")
     
     try:
         # Create ELRQueryRequest from ELRQuery
