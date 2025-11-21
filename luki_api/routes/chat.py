@@ -12,6 +12,7 @@ import uuid
 from luki_api.config import settings
 from luki_api.clients.agent_client import agent_client, AgentChatRequest
 from luki_api.clients.memory_service import MemoryServiceClient, ELRQueryRequest
+from luki_api.clients.security_service import enforce_policy_scopes
 from datetime import datetime
 
 router = APIRouter()
@@ -379,6 +380,19 @@ async def capture_conversation_elr(user_id: str, user_message: str, ai_response:
             logger.warning(f"Skipping ELR capture - response contains documentation: {indicator}")
             return
     
+    policy_result = await enforce_policy_scopes(
+        user_id=user_id,
+        requested_scopes=["elr_memories"],
+        requester_role="api_gateway",
+        context={"operation": "capture_conversation_elr"},
+    )
+    if not policy_result.get("allowed", False):
+        logger.info(
+            "Skipping ELR capture due to consent policy for user %s",
+            user_id,
+        )
+        return
+    
     try:
         memory_client = MemoryServiceClient()
         
@@ -570,34 +584,46 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
         # User-specific search (only if authenticated)
         if not is_anonymous(chat_request.user_id, chat_request.client_tag):
             try:
-                memory_client = MemoryServiceClient()
-                
-                # Check if user is asking to list memories
-                msg_lower = latest_message.content.lower()
-                is_listing_memories = any(phrase in msg_lower for phrase in [
-                    "list my memories", "show my memories", "what do you remember",
-                    "my saved memories", "list saved memories", "show saved memories",
-                    "what memories", "retrieve memories", "get my memories",
-                    "tell me my memories", "all of them", "all my memories",
-                    "what are my memories", "show me my memories"
-                ])
-                
-                if is_listing_memories:
-                    # Get ALL memories for listing
-                    logger.info("User requesting to list all memories")
-                    user_query = ELRQueryRequest(
-                        user_id=chat_request.user_id,
-                        query=" ",  # Use space to get all memories
-                        k=50  # Get more memories for listing
+                policy_result = await enforce_policy_scopes(
+                    user_id=chat_request.user_id,
+                    requested_scopes=["elr_memories"],
+                    requester_role="api_gateway",
+                    context={"operation": "chat_memory_retrieval"},
+                )
+                if not policy_result.get("allowed", False):
+                    logger.info(
+                        "Skipping memory retrieval in chat due to consent policy for user %s",
+                        chat_request.user_id,
                     )
                 else:
-                    # Normal semantic search for relevant memories
-                    user_query = ELRQueryRequest(
-                        user_id=chat_request.user_id,
-                        query=latest_message.content,
-                        k=5
-                    )
-                tasks.append(memory_client.search_elr_items(user_query))
+                    memory_client = MemoryServiceClient()
+                    
+                    # Check if user is asking to list memories
+                    msg_lower = latest_message.content.lower()
+                    is_listing_memories = any(phrase in msg_lower for phrase in [
+                        "list my memories", "show my memories", "what do you remember",
+                        "my saved memories", "list saved memories", "show saved memories",
+                        "what memories", "retrieve memories", "get my memories",
+                        "tell me my memories", "all of them", "all my memories",
+                        "what are my memories", "show me my memories"
+                    ])
+                    
+                    if is_listing_memories:
+                        # Get ALL memories for listing
+                        logger.info("User requesting to list all memories")
+                        user_query = ELRQueryRequest(
+                            user_id=chat_request.user_id,
+                            query=" ",  # Use space to get all memories
+                            k=50  # Get more memories for listing
+                        )
+                    else:
+                        # Normal semantic search for relevant memories
+                        user_query = ELRQueryRequest(
+                            user_id=chat_request.user_id,
+                            query=latest_message.content,
+                            k=5
+                        )
+                    tasks.append(memory_client.search_elr_items(user_query))
             except Exception as e:
                 logger.warning(f"Unable to init user memory query: {e}")
         else:
@@ -796,13 +822,25 @@ async def chat_stream_endpoint(chat_request: ChatRequest, request: Request):
             memory_client = None
             if not is_anonymous(chat_request.user_id, chat_request.client_tag):
                 try:
-                    memory_client = MemoryServiceClient()
-                    user_query = ELRQueryRequest(
+                    policy_result = await enforce_policy_scopes(
                         user_id=chat_request.user_id,
-                        query=latest_message.content,
-                        k=5
+                        requested_scopes=["elr_memories"],
+                        requester_role="api_gateway",
+                        context={"operation": "chat_stream_memory_retrieval"},
                     )
-                    tasks.append(memory_client.search_elr_items(user_query))
+                    if not policy_result.get("allowed", False):
+                        logger.info(
+                            "Skipping memory retrieval in streaming chat due to consent policy for user %s",
+                            chat_request.user_id,
+                        )
+                    else:
+                        memory_client = MemoryServiceClient()
+                        user_query = ELRQueryRequest(
+                            user_id=chat_request.user_id,
+                            query=latest_message.content,
+                            k=5
+                        )
+                        tasks.append(memory_client.search_elr_items(user_query))
                 except Exception as e:
                     logger.warning(f"Unable to init user memory query (stream): {e}")
             else:
