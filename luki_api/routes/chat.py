@@ -466,6 +466,15 @@ class ChatMessage(BaseModel):
             }
         }
 
+
+class WalletContext(BaseModel):
+    wallet_address: Optional[str] = Field(default=None)
+    connected: Optional[bool] = Field(default=None)
+    tier: Optional[str] = Field(default=None)
+    has_genesis_nft: Optional[bool] = Field(default=None)
+    luki_balance: Optional[float] = Field(default=None)
+
+
 class ChatRequest(BaseModel):
     """Schema for chat requests to the LUKi agent"""
     messages: List[ChatMessage] = Field(
@@ -481,6 +490,10 @@ class ChatRequest(BaseModel):
     client_tag: Optional[str] = Field(
         default=None,
         description="Optional tag indicating client source (e.g., luki_taster_widget)"
+    )
+    wallet: Optional[WalletContext] = Field(
+        default=None,
+        description="Optional wallet/on-chain context for token-gated experiences"
     )
     
     class Config:
@@ -646,18 +659,26 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
             except Exception as e:
                 logger.warning(f"Memory retrieval gather failed: {e}")
 
-        # Prepare agent request with memory context
+        # Prepare agent request with memory and optional wallet context
+        agent_context: Dict[str, Any] = {
+            "conversation_history": [
+                {"role": msg.role, "content": msg.content}
+                for msg in chat_request.messages[:-1]  # Exclude the latest message
+            ],
+            "memory_context": memory_context,
+        }
+        if chat_request.wallet is not None:
+            try:
+                agent_context["wallet"] = chat_request.wallet.model_dump()
+            except Exception:
+                # Defensive: if model_dump is unavailable, fall back to best-effort repr
+                agent_context["wallet"] = chat_request.wallet.dict() if hasattr(chat_request.wallet, "dict") else {}
+
         agent_request = AgentChatRequest(
             message=latest_message.content,
             user_id=chat_request.user_id,
             session_id=chat_request.session_id,
-            context={
-                "conversation_history": [
-                    {"role": msg.role, "content": msg.content} 
-                    for msg in chat_request.messages[:-1]  # Exclude the latest message
-                ],
-                "memory_context": memory_context
-            }
+            context=agent_context,
         )
         
         # Call the core agent
@@ -862,18 +883,25 @@ async def chat_stream_endpoint(chat_request: ChatRequest, request: Request):
                     logger.info(f"Retrieved total {len(memory_context)} user memory items for streaming")
                 except Exception as e:
                     logger.warning(f"Memory retrieval gather (stream) failed: {e}")
-            # Prepare agent request with memory context
+            # Prepare agent request with memory and optional wallet context
+            agent_context: Dict[str, Any] = {
+                "conversation_history": [
+                    {"role": msg.role, "content": msg.content}
+                    for msg in chat_request.messages[:-1]
+                ],
+                "memory_context": memory_context,
+            }
+            if chat_request.wallet is not None:
+                try:
+                    agent_context["wallet"] = chat_request.wallet.model_dump()
+                except Exception:
+                    agent_context["wallet"] = chat_request.wallet.dict() if hasattr(chat_request.wallet, "dict") else {}
+
             agent_request = AgentChatRequest(
                 message=latest_message.content,
                 user_id=chat_request.user_id,
                 session_id=chat_request.session_id,
-                context={
-                    "conversation_history": [
-                        {"role": msg.role, "content": msg.content} 
-                        for msg in chat_request.messages[:-1]
-                    ],
-                    "memory_context": memory_context
-                }
+                context=agent_context,
             )
             
             # Stream response directly from agent; sanitization is handled by the core agent.
