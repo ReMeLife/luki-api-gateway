@@ -9,6 +9,7 @@ from luki_api.clients.memory_service import (
     ELRItemRequest,
     ELRQueryRequest
 )
+from luki_api.clients.security_service import enforce_policy_scopes
 from luki_api.middleware.metrics import track_elr_gateway_operation
 
 router = APIRouter()
@@ -110,7 +111,19 @@ async def get_elr_items(user_id: str, request: Request,
     """
     logger.info(f"Retrieving ELR items for user: {user_id}")
     track_elr_gateway_operation("elr_get_items")
-    
+
+    policy_result = await enforce_policy_scopes(
+        user_id=user_id,
+        requested_scopes=["elr_memories"],
+        requester_role="api_gateway",
+        context={"operation": "get_elr_items"},
+    )
+    if not policy_result.get("allowed", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient consent to access ELR items for this user",
+        )
+
     try:
         # Call the memory service
         result = await memory_client.get_elr_items(user_id=user_id, limit=limit)
@@ -165,7 +178,19 @@ async def create_elr_item(item: ELRItem, request: Request,
     """
     logger.info(f"Creating ELR item for user: {item.user_id}")
     track_elr_gateway_operation("elr_create_item")
-    
+
+    policy_result = await enforce_policy_scopes(
+        user_id=item.user_id,
+        requested_scopes=["elr_memories"],
+        requester_role="api_gateway",
+        context={"operation": "create_elr_item"},
+    )
+    if not policy_result.get("allowed", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient consent to create ELR items for this user",
+        )
+
     try:
         # Create ELRItemRequest from ELRItem
         item_request = ELRItemRequest(
@@ -221,7 +246,19 @@ async def update_elr_item(item_id: str, item: ELRItem, request: Request,
     """
     logger.info(f"Updating ELR item: {item_id}")
     track_elr_gateway_operation("elr_update_item")
-    
+
+    policy_result = await enforce_policy_scopes(
+        user_id=item.user_id,
+        requested_scopes=["elr_memories"],
+        requester_role="api_gateway",
+        context={"operation": "update_elr_item"},
+    )
+    if not policy_result.get("allowed", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient consent to update ELR items for this user",
+        )
+
     try:
         # Create ELRItemRequest from ELRItem
         item_request = ELRItemRequest(
@@ -273,7 +310,22 @@ async def delete_elr_item(item_id: str, request: Request,
     """
     logger.info(f"Deleting ELR item: {item_id}")
     track_elr_gateway_operation("elr_delete_item")
-    
+
+    # Extract user_id prefix when available (format: user_id_hash)
+    user_id = item_id.split("_")[0] if "_" in item_id else ""
+    if user_id:
+        policy_result = await enforce_policy_scopes(
+            user_id=user_id,
+            requested_scopes=["elr_memories"],
+            requester_role="api_gateway",
+            context={"operation": "delete_elr_item"},
+        )
+        if not policy_result.get("allowed", False):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient consent to delete ELR items for this user",
+            )
+
     try:
         # Call the memory service
         result = await memory_client.delete_elr_item(item_id)
@@ -327,7 +379,19 @@ async def search_elr_items(query: ELRQuery, request: Request,
     """
     logger.info(f"Searching ELR items for user: {query.user_id}")
     track_elr_gateway_operation("elr_search_items")
-    
+
+    policy_result = await enforce_policy_scopes(
+        user_id=query.user_id,
+        requested_scopes=["elr_memories"],
+        requester_role="api_gateway",
+        context={"operation": "search_elr_items"},
+    )
+    if not policy_result.get("allowed", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient consent to search ELR items for this user",
+        )
+
     try:
         # Create ELRQueryRequest from ELRQuery
         query_request = ELRQueryRequest(
