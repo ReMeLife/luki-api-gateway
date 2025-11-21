@@ -11,6 +11,7 @@ import asyncio
 import json
 
 from luki_api.clients.memory_service import MemoryServiceClient, ELRItemRequest
+from luki_api.clients.security_service import enforce_policy_scopes
 from luki_api.config import settings
 
 try:
@@ -131,7 +132,19 @@ async def get_user_memories(
     - List of memory items with metadata
     """
     logger.info(f"Fetching memories for user: {user_id}, limit: {limit}, offset: {offset}")
-    
+
+    policy_result = await enforce_policy_scopes(
+        user_id=user_id,
+        requested_scopes=["elr_memories"],
+        requester_role="api_gateway",
+        context={"operation": "get_user_memories"},
+    )
+    if not policy_result.get("allowed", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient consent to access memories for this user",
+        )
+
     cache_key = _build_cache_key(user_id, limit, offset)
     if offset == 0:
         cached = await _get_cached_memories(cache_key)
@@ -187,6 +200,19 @@ async def get_user_memories(
 async def get_user_memory_profile(user_id: str):
     """Get aggregated memory profile for a user"""
     logger.info(f"Fetching memory profile for user: {user_id}")
+
+    policy_result = await enforce_policy_scopes(
+        user_id=user_id,
+        requested_scopes=["analytics"],
+        requester_role="api_gateway",
+        context={"operation": "get_user_memory_profile"},
+    )
+    if not policy_result.get("allowed", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient consent to access memory profile for this user",
+        )
+
     try:
         memory_client = MemoryServiceClient()
         stats = await memory_client._make_request("get", f"/users/{user_id}/profile")
@@ -214,7 +240,19 @@ async def create_memory(user_id: str, memory: Memory):
     - Created memory with ID and timestamp
     """
     logger.info(f"Creating memory for user: {user_id}")
-    
+
+    policy_result = await enforce_policy_scopes(
+        user_id=user_id,
+        requested_scopes=["elr_memories"],
+        requester_role="api_gateway",
+        context={"operation": "create_memory"},
+    )
+    if not policy_result.get("allowed", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient consent to create memories for this user",
+        )
+
     try:
         memory_client = MemoryServiceClient()
         
@@ -278,7 +316,22 @@ async def delete_memory(memory_id: str):
     - 204 No Content on success
     """
     logger.info(f"🗑️ Deleting memory: {memory_id}")
-    
+
+    # Extract user_id prefix when available (format: user_id_hash)
+    user_id = memory_id.split("_")[0] if "_" in memory_id else ""
+    if user_id:
+        policy_result = await enforce_policy_scopes(
+            user_id=user_id,
+            requested_scopes=["elr_memories"],
+            requester_role="api_gateway",
+            context={"operation": "delete_memory"},
+        )
+        if not policy_result.get("allowed", False):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient consent to delete memories for this user",
+            )
+
     try:
         memory_client = MemoryServiceClient()
         
@@ -316,7 +369,19 @@ async def search_memories(
     - Matching memories sorted by relevance
     """
     logger.info(f"Searching memories for user {user_id}: '{query}'")
-    
+
+    policy_result = await enforce_policy_scopes(
+        user_id=user_id,
+        requested_scopes=["elr_memories"],
+        requester_role="api_gateway",
+        context={"operation": "search_memories"},
+    )
+    if not policy_result.get("allowed", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient consent to search memories for this user",
+        )
+
     try:
         memory_client = MemoryServiceClient()
         from luki_api.clients.memory_service import ELRQueryRequest
