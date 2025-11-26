@@ -6,8 +6,7 @@ watchPatterns = [
   "requirements.txt",
   "requirements-railway.txt",
   "Dockerfile",
-  "Procfile",
-  "FORCE_REBUILD.txt"
+  "Procfile"
 ]
 
 [deploy]
