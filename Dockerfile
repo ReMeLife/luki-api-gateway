@@ -32,8 +32,6 @@ WORKDIR /app
 
 # Copy application code
 COPY . .
-# Force rebuild trigger file
-COPY FORCE_REBUILD.txt /app/FORCE_REBUILD.txt
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash app \
