@@ -9,6 +9,7 @@ import logging
 from datetime import datetime, timedelta
 import asyncio
 import json
+import os
 
 from luki_api.clients.memory_service import MemoryServiceClient, ELRItemRequest
 from luki_api.clients.security_service import enforce_policy_scopes
@@ -60,6 +61,7 @@ class UserMemoryProfile(BaseModel):
 _redis_client = None
 _in_memory_cache: Dict[str, Dict[str, Any]] = {}
 _CACHE_TTL_SECONDS = 60
+LUKI_ENABLE_MEMORY_CACHE = os.getenv("LUKI_ENABLE_MEMORY_CACHE", "false").lower() == "true"
 
 
 async def _get_redis_client():
@@ -114,6 +116,34 @@ async def _set_cached_memories(key: str, value: MemoriesListResponse) -> None:
     _in_memory_cache[key] = {"value": payload, "expires_at": expires_at}
 
 
+async def _invalidate_user_memories_cache(user_id: str) -> None:
+    """Invalidate cached memory lists for a specific user.
+
+    This clears both the local in-process cache and any Redis entries
+    whose keys begin with the user's memories prefix. This ensures that
+    newly created or deleted memories are reflected immediately in the
+    UI, instead of waiting for the cache TTL to expire.
+    """
+    prefix = f"memories:{user_id}:"
+
+    # Clear in-memory cache entries
+    keys_to_delete = [key for key in _in_memory_cache.keys() if key.startswith(prefix)]
+    for key in keys_to_delete:
+        _in_memory_cache.pop(key, None)
+
+    # Clear Redis cache entries when available
+    client = await _get_redis_client()
+    if client is not None:
+        try:
+            pattern = prefix + "*"
+            matching_keys = await client.keys(pattern)
+            if matching_keys:
+                await client.delete(*matching_keys)
+        except Exception:
+            # Cache invalidation failures should never break the request path
+            pass
+
+
 @router.get("/items/{user_id}", response_model=MemoriesListResponse)
 async def get_user_memories(
     user_id: str,
@@ -146,7 +176,7 @@ async def get_user_memories(
         )
 
     cache_key = _build_cache_key(user_id, limit, offset)
-    if offset == 0:
+    if LUKI_ENABLE_MEMORY_CACHE and offset == 0:
         cached = await _get_cached_memories(cache_key)
         if cached is not None:
             return cached
@@ -183,7 +213,7 @@ async def get_user_memories(
             user_id=user_id
         )
 
-        if offset == 0:
+        if LUKI_ENABLE_MEMORY_CACHE and offset == 0:
             await _set_cached_memories(cache_key, response)
 
         return response
@@ -280,7 +310,14 @@ async def create_memory(user_id: str, memory: Memory):
         if result.get("success"):
             # Return the created memory
             memory_id = result.get("chunk_ids", [""])[0] if result.get("chunk_ids") else "unknown"
-            
+
+            # Invalidate user memory cache so new memory appears immediately
+            try:
+                await _invalidate_user_memories_cache(user_id)
+            except Exception:
+                # Cache invalidation is best-effort and should not break creation
+                pass
+
             return MemoryResponse(
                 id=memory_id,
                 content=memory.content,
@@ -340,6 +377,14 @@ async def delete_memory(memory_id: str):
         
         logger.info(f"✅ Memory {memory_id} deleted successfully from memory service")
         logger.info(f"Delete result: {result}")
+
+        # Invalidate user memory cache so deletion is reflected immediately
+        try:
+            if user_id:
+                await _invalidate_user_memories_cache(user_id)
+        except Exception:
+            # Cache invalidation is best-effort
+            pass
         
         return None
         
