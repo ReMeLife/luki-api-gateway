@@ -6,9 +6,19 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
+import asyncio
+import json
+import os
 
 from luki_api.clients.memory_service import MemoryServiceClient, ELRItemRequest
+from luki_api.clients.security_service import enforce_policy_scopes
+from luki_api.config import settings
+
+try:
+    import redis.asyncio as redis
+except ImportError:
+    redis = None
 router = APIRouter(prefix="/api/elr", tags=["memories"])
 logger = logging.getLogger(__name__)
 
@@ -36,6 +46,104 @@ class MemoriesListResponse(BaseModel):
     user_id: str
 
 
+class UserMemoryProfile(BaseModel):
+    """Aggregated memory profile for a user"""
+    user_id: str
+    total_memories: int
+    total_chunks: int
+    content_type_breakdown: Dict[str, int]
+    sensitivity_breakdown: Dict[str, int]
+    earliest_memory: Optional[str] = None
+    latest_memory: Optional[str] = None
+    storage_size_mb: float
+
+
+_redis_client = None
+_in_memory_cache: Dict[str, Dict[str, Any]] = {}
+_CACHE_TTL_SECONDS = 60
+LUKI_ENABLE_MEMORY_CACHE = os.getenv("LUKI_ENABLE_MEMORY_CACHE", "false").lower() == "true"
+
+
+async def _get_redis_client():
+    global _redis_client
+    if _redis_client is None and redis is not None and settings.REDIS_URL:
+        try:
+            client = redis.from_url(settings.REDIS_URL)
+            await client.ping()
+            _redis_client = client
+        except Exception:
+            _redis_client = None
+    return _redis_client
+
+
+def _build_cache_key(user_id: str, limit: int, offset: int) -> str:
+    return f"memories:{user_id}:limit={limit}:offset={offset}"
+
+
+async def _get_cached_memories(key: str) -> Optional[MemoriesListResponse]:
+    now = datetime.utcnow()
+    client = await _get_redis_client()
+    if client is not None:
+        try:
+            cached = await client.get(key)
+            if cached:
+                data = json.loads(cached)
+                return MemoriesListResponse(**data)
+        except Exception:
+            pass
+    entry = _in_memory_cache.get(key)
+    if entry:
+        expires_at = entry.get("expires_at")
+        if isinstance(expires_at, datetime) and expires_at > now:
+            try:
+                return MemoriesListResponse(**entry["value"])
+            except Exception:
+                return None
+        _in_memory_cache.pop(key, None)
+    return None
+
+
+async def _set_cached_memories(key: str, value: MemoriesListResponse) -> None:
+    payload = value.model_dump()
+    expires_at = datetime.utcnow() + timedelta(seconds=_CACHE_TTL_SECONDS)
+    client = await _get_redis_client()
+    if client is not None:
+        try:
+            encoded = json.dumps(payload)
+            await client.set(key, encoded, ex=_CACHE_TTL_SECONDS)
+        except Exception:
+            pass
+    _in_memory_cache[key] = {"value": payload, "expires_at": expires_at}
+
+
+async def _invalidate_user_memories_cache(user_id: str) -> None:
+    """Invalidate cached memory lists for a specific user.
+
+    This clears both the local in-process cache and any Redis entries
+    whose keys begin with the user's memories prefix. This ensures that
+    newly created or deleted memories are reflected immediately in the
+    UI, instead of waiting for the cache TTL to expire.
+    """
+    prefix = f"memories:{user_id}:"
+
+    # Clear in-memory cache entries
+    keys_to_delete = [key for key in _in_memory_cache.keys() if key.startswith(prefix)]
+    for key in keys_to_delete:
+        _in_memory_cache.pop(key, None)
+
+    # Clear Redis cache entries when available
+    client = await _get_redis_client()
+    if client is not None:
+        try:
+            pattern = prefix + "*"
+            matching_keys = await client.keys(pattern)
+            if matching_keys:
+                await client.delete(*matching_keys)
+        except Exception:
+            # Cache invalidation failures should never break the request path
+            pass
+
+
 @router.get("/items/{user_id}", response_model=MemoriesListResponse)
 async def get_user_memories(
     user_id: str,
@@ -54,7 +162,25 @@ async def get_user_memories(
     - List of memory items with metadata
     """
     logger.info(f"Fetching memories for user: {user_id}, limit: {limit}, offset: {offset}")
-    
+
+    policy_result = await enforce_policy_scopes(
+        user_id=user_id,
+        requested_scopes=["elr_memories"],
+        requester_role="api_gateway",
+        context={"operation": "get_user_memories"},
+    )
+    if not policy_result.get("allowed", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient consent to access memories for this user",
+        )
+
+    cache_key = _build_cache_key(user_id, limit, offset)
+    if LUKI_ENABLE_MEMORY_CACHE and offset == 0:
+        cached = await _get_cached_memories(cache_key)
+        if cached is not None:
+            return cached
+
     try:
         memory_client = MemoryServiceClient()
         from luki_api.clients.memory_service import ELRQueryRequest
@@ -81,17 +207,53 @@ async def get_user_memories(
         
         logger.info(f"Found {len(memories)} memories for user {user_id}")
         
-        return MemoriesListResponse(
+        response = MemoriesListResponse(
             items=memories,
             total=len(memories),
             user_id=user_id
         )
+
+        if LUKI_ENABLE_MEMORY_CACHE and offset == 0:
+            await _set_cached_memories(cache_key, response)
+
+        return response
         
     except Exception as e:
         logger.error(f"Failed to fetch memories: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch memories: {str(e)}"
+        )
+
+
+@router.get("/users/{user_id}/profile", response_model=UserMemoryProfile)
+async def get_user_memory_profile(user_id: str):
+    """Get aggregated memory profile for a user"""
+    logger.info(f"Fetching memory profile for user: {user_id}")
+
+    policy_result = await enforce_policy_scopes(
+        user_id=user_id,
+        requested_scopes=["analytics"],
+        requester_role="api_gateway",
+        context={"operation": "get_user_memory_profile"},
+    )
+    if not policy_result.get("allowed", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient consent to access memory profile for this user",
+        )
+
+    try:
+        memory_client = MemoryServiceClient()
+        stats = await memory_client._make_request("get", f"/users/{user_id}/profile")
+        if isinstance(stats, dict) and "user_id" not in stats:
+            stats["user_id"] = user_id
+        return UserMemoryProfile(**stats)
+    except Exception as e:
+        logger.error(f"Failed to fetch memory profile: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch memory profile: {str(e)}"
         )
 
 
@@ -108,7 +270,19 @@ async def create_memory(user_id: str, memory: Memory):
     - Created memory with ID and timestamp
     """
     logger.info(f"Creating memory for user: {user_id}")
-    
+
+    policy_result = await enforce_policy_scopes(
+        user_id=user_id,
+        requested_scopes=["elr_memories"],
+        requester_role="api_gateway",
+        context={"operation": "create_memory"},
+    )
+    if not policy_result.get("allowed", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient consent to create memories for this user",
+        )
+
     try:
         memory_client = MemoryServiceClient()
         
@@ -136,7 +310,14 @@ async def create_memory(user_id: str, memory: Memory):
         if result.get("success"):
             # Return the created memory
             memory_id = result.get("chunk_ids", [""])[0] if result.get("chunk_ids") else "unknown"
-            
+
+            # Invalidate user memory cache so new memory appears immediately
+            try:
+                await _invalidate_user_memories_cache(user_id)
+            except Exception:
+                # Cache invalidation is best-effort and should not break creation
+                pass
+
             return MemoryResponse(
                 id=memory_id,
                 content=memory.content,
@@ -172,7 +353,22 @@ async def delete_memory(memory_id: str):
     - 204 No Content on success
     """
     logger.info(f"🗑️ Deleting memory: {memory_id}")
-    
+
+    # Extract user_id prefix when available (format: user_id_hash)
+    user_id = memory_id.split("_")[0] if "_" in memory_id else ""
+    if user_id:
+        policy_result = await enforce_policy_scopes(
+            user_id=user_id,
+            requested_scopes=["elr_memories"],
+            requester_role="api_gateway",
+            context={"operation": "delete_memory"},
+        )
+        if not policy_result.get("allowed", False):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient consent to delete memories for this user",
+            )
+
     try:
         memory_client = MemoryServiceClient()
         
@@ -181,6 +377,14 @@ async def delete_memory(memory_id: str):
         
         logger.info(f"✅ Memory {memory_id} deleted successfully from memory service")
         logger.info(f"Delete result: {result}")
+
+        # Invalidate user memory cache so deletion is reflected immediately
+        try:
+            if user_id:
+                await _invalidate_user_memories_cache(user_id)
+        except Exception:
+            # Cache invalidation is best-effort
+            pass
         
         return None
         
@@ -210,7 +414,19 @@ async def search_memories(
     - Matching memories sorted by relevance
     """
     logger.info(f"Searching memories for user {user_id}: '{query}'")
-    
+
+    policy_result = await enforce_policy_scopes(
+        user_id=user_id,
+        requested_scopes=["elr_memories"],
+        requester_role="api_gateway",
+        context={"operation": "search_memories"},
+    )
+    if not policy_result.get("allowed", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient consent to search memories for this user",
+        )
+
     try:
         memory_client = MemoryServiceClient()
         from luki_api.clients.memory_service import ELRQueryRequest

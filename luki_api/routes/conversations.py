@@ -10,21 +10,27 @@ import logging
 from datetime import datetime
 import uuid
 import os
-from supabase import create_client, Client
+
+try:
+    # Supabase is optional: when not installed, we fall back to in-memory storage.
+    from supabase import create_client, Client  # type: ignore
+except ImportError:  # pragma: no cover - exercised indirectly in tests
+    create_client = None  # type: ignore[assignment]
+    Client = None  # type: ignore[assignment]
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 logger = logging.getLogger(__name__)
 
-# Initialize Supabase client
+# Initialize Supabase client (if available)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-supabase: Optional[Client] = None
+supabase: Optional[Client] = None  # type: ignore[type-arg]
 
-if SUPABASE_URL and SUPABASE_KEY:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+if SUPABASE_URL and SUPABASE_KEY and create_client is not None:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)  # type: ignore[call-arg]
     logger.info("✅ Supabase client initialized for conversations")
 else:
-    logger.warning("⚠️ Supabase not configured - using in-memory storage")
+    logger.warning("⚠️ Supabase not configured or supabase package missing - using in-memory storage")
 
 
 class Message(BaseModel):

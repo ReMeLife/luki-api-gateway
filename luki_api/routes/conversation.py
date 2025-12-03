@@ -9,6 +9,7 @@ from typing import List, Optional
 import logging
 from datetime import datetime
 from luki_api.clients.memory_service import MemoryServiceClient
+from luki_api.clients.security_service import enforce_policy_scopes
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -56,7 +57,19 @@ async def get_conversation_history(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Conversation history not available for anonymous users"
         )
-    
+
+    policy_result = await enforce_policy_scopes(
+        user_id=user_id,
+        requested_scopes=["elr_memories"],
+        requester_role="api_gateway",
+        context={"operation": "get_conversation_history"},
+    )
+    if not policy_result.get("allowed", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient consent to access conversation history for this user",
+        )
+
     try:
         memory_client = MemoryServiceClient()
         from luki_api.clients.memory_service import ELRQueryRequest
@@ -174,7 +187,19 @@ async def get_all_conversation_history(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Conversation history not available for anonymous users"
         )
-    
+
+    policy_result = await enforce_policy_scopes(
+        user_id=user_id,
+        requested_scopes=["elr_memories"],
+        requester_role="api_gateway",
+        context={"operation": "get_all_conversation_history"},
+    )
+    if not policy_result.get("allowed", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient consent to access conversation history for this user",
+        )
+
     messages = []
     try:
         # Get from Supabase directly
@@ -248,7 +273,19 @@ async def clear_conversation_history(user_id: str):
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Operation not available for anonymous users"
         )
-    
+
+    policy_result = await enforce_policy_scopes(
+        user_id=user_id,
+        requested_scopes=["elr_memories"],
+        requester_role="api_gateway",
+        context={"operation": "clear_conversation_history"},
+    )
+    if not policy_result.get("allowed", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient consent to clear conversation history for this user",
+        )
+
     try:
         # TODO: Implement soft delete in memory service
         # For now, return success

@@ -9,13 +9,17 @@ import json
 import re
 import asyncio
 import uuid
+import os
 from luki_api.config import settings
 from luki_api.clients.agent_client import agent_client, AgentChatRequest
 from luki_api.clients.memory_service import MemoryServiceClient, ELRQueryRequest
+from luki_api.clients.security_service import enforce_policy_scopes
+from luki_api.routes.memories import _invalidate_user_memories_cache
 from datetime import datetime
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+LUKI_ENABLE_AI_MEMORY_DETECTION = os.getenv("LUKI_ENABLE_AI_MEMORY_DETECTION", "false").lower() == "true"
 
 # Import conversation store for auto-saving
 try:
@@ -379,21 +383,121 @@ async def capture_conversation_elr(user_id: str, user_message: str, ai_response:
             logger.warning(f"Skipping ELR capture - response contains documentation: {indicator}")
             return
     
+    policy_result = await enforce_policy_scopes(
+        user_id=user_id,
+        requested_scopes=["elr_memories"],
+        requester_role="api_gateway",
+        context={"operation": "capture_conversation_elr"},
+    )
+    if not policy_result.get("allowed", False):
+        logger.info(
+            "Skipping ELR capture due to consent policy for user %s",
+            user_id,
+        )
+        return
+    
     try:
         memory_client = MemoryServiceClient()
-        
-        # 🔥 NEW: Use AI-powered memory detection instead of keywords
-        memory_result = await intelligent_memory_detection(user_message, conversation_history)
-        
-        # Skip saving if AI determined it's not a memory
-        if not memory_result:
-            logger.debug(f"AI determined not a memory: {user_message[:50]}")
-            return
-        
-        # Extract distilled memory content using AI result
-        content = memory_result['content']
-        content_type = memory_result['type'].upper()  # PREFERENCE, EXPERIENCE, FACT, GOAL
-        
+
+        memory_result: Optional[Dict[str, Any]] = None
+        if LUKI_ENABLE_AI_MEMORY_DETECTION:
+            memory_result = await intelligent_memory_detection(user_message, conversation_history)
+
+        msg_lower = user_message.lower()
+        content: str
+        content_type: str
+
+        if memory_result:
+            content = (memory_result.get("content") or "").strip()
+            if not content:
+                return
+            raw_type = (memory_result.get("type") or "preference").upper()
+            content_type = raw_type
+
+            # Extra guard: if the *user message* is a pure question ("what's my
+            # favourite colour?"), do not treat it as a preference memory unless
+            # it also contains an explicit preference/save statement.
+            if content_type == "PREFERENCE":
+                stripped = msg_lower.strip()
+                # Very lightweight interrogative detection
+                question_starts = (
+                    "what", "what's", "whats", "who", "when", "where", "why", "how",
+                    "is ", "are ", "do ", "does ", "did ", "can ", "could ", "would ", "will ", "should ", "shall ", "may ", "might ", "am i"
+                )
+                is_question = "?" in stripped or stripped.startswith(question_starts)
+                # Only treat first-person preference verbs or explicit save/remember
+                # commands as overrides for questions – not bare phrases like
+                # "my favourite" on their own.
+                explicit_pref_markers = [
+                    "i like ", "i love ", "i enjoy ", "i prefer ",
+                    "i hate ", "i dislike ",
+                    "remember that ", "save this ", "save that ",
+                ]
+                has_explicit_pref = any(marker in stripped for marker in explicit_pref_markers)
+                if is_question and not has_explicit_pref:
+                    logger.info(
+                        "Skipping ELR capture for interrogative-only preference question: %s",
+                        user_message,
+                    )
+                    return
+        else:
+            extracted = extract_memory_content(user_message).strip()
+            if not extracted:
+                return
+
+            # If extract_memory_content returns the whole message unchanged,
+            # apply an extra question filter before relying on loose keywords
+            # like "my favourite". This prevents pure questions such as
+            # "What's my favourite colour?" from being saved as memories.
+            if extracted.lower() == user_message.strip().lower():
+                stripped = msg_lower.strip()
+                question_starts = (
+                    "what", "what's", "whats", "who", "when", "where", "why", "how",
+                    "is ", "are ", "do ", "does ", "did ", "can ", "could ", "would ", "will ", "should ", "shall ", "may ", "might ", "am i"
+                )
+                is_question = "?" in stripped or stripped.startswith(question_starts)
+
+                # Allow question-like forms only when they are explicit memory
+                # commands ("remember that ...", "save this ...")
+                explicit_memory_commands = (
+                    "remember ", "remember that ", "save this ", "save that ", "please save ", "please remember ",
+                )
+                has_explicit_command = stripped.startswith(explicit_memory_commands)
+
+                keywords = [
+                    "i like ",
+                    "i love ",
+                    "i enjoy ",
+                    "i prefer ",
+                    "i hate ",
+                    "i dislike ",
+                    "my favorite",
+                    "my favourite",
+                    "remember that ",
+                    "save this ",
+                    "save that ",
+                ]
+
+                if is_question and not has_explicit_command:
+                    logger.info(
+                        "Skipping ELR capture for interrogative-only message with preference keywords: %s",
+                        user_message,
+                    )
+                    return
+
+                if not any(kw in msg_lower for kw in keywords):
+                    return
+
+            content = extracted
+            if any(kw in msg_lower for kw in ["i like ", "i love ", "i enjoy ", "i prefer ", "i hate ", "i dislike ", "my favorite", "my favourite"]):
+                content_type = "PREFERENCE"
+            elif any(phrase in msg_lower for phrase in ["i remember", "i once", "i did ", "i went ", "i met ", "i saw "]):
+                content_type = "EXPERIENCE"
+            elif any(phrase in msg_lower for phrase in ["my name is", "i am ", "i'm ", "i work as", "i live in"]):
+                content_type = "FACT"
+            else:
+                content_type = "FACT"
+
         logger.info(f"💾 Saving memory: [{content_type}] {content[:100]}...")
         
         elr_data = {
@@ -408,7 +512,7 @@ async def capture_conversation_elr(user_id: str, user_message: str, ai_response:
                     "authenticated": True,
                     "is_preference": True,
                     "detection_type": "ai_powered",
-                    "ai_reasoning": memory_result['reasoning'],
+                    "ai_reasoning": memory_result.get("reasoning", "heuristic") if memory_result else "heuristic",
                     "original_message": user_message[:500],  # Keep original for reference, truncated
                     "ai_response_preview": ai_response[:200]  # Brief AI response preview
                 }
@@ -422,13 +526,29 @@ async def capture_conversation_elr(user_id: str, user_message: str, ai_response:
             response = await client.post(
                 f"{memory_client.base_url.rstrip('/')}/ingestion/elr",
                 json=elr_data,
-                timeout=5.0
+                timeout=5.0,
             )
             if response.status_code == 200:
                 logger.info(f"Successfully captured ELR for authenticated user {user_id}")
+
+                # Invalidate cached memory lists so the new memory appears in the
+                # MemoryPanel on the next poll instead of waiting for cache TTL.
+                try:
+                    await _invalidate_user_memories_cache(user_id)
+                except Exception as cache_err:
+                    # Cache invalidation is best-effort and must never break chat flow
+                    logger.warning(
+                        "Failed to invalidate memory cache for user %s after ELR capture: %s",
+                        user_id,
+                        cache_err,
+                    )
             else:
                 error_detail = response.text if response.text else "No error detail"
-                logger.warning(f"ELR capture failed with status {response.status_code}: {error_detail}")
+                logger.warning(
+                    "ELR capture failed with status %s: %s",
+                    response.status_code,
+                    error_detail,
+                )
                 
     except Exception as e:
         logger.error(f"ELR capture error: {e}")
@@ -452,6 +572,15 @@ class ChatMessage(BaseModel):
             }
         }
 
+
+class WalletContext(BaseModel):
+    wallet_address: Optional[str] = Field(default=None)
+    connected: Optional[bool] = Field(default=None)
+    tier: Optional[str] = Field(default=None)
+    has_genesis_nft: Optional[bool] = Field(default=None)
+    luki_balance: Optional[float] = Field(default=None)
+
+
 class ChatRequest(BaseModel):
     """Schema for chat requests to the LUKi agent"""
     messages: List[ChatMessage] = Field(
@@ -467,6 +596,14 @@ class ChatRequest(BaseModel):
     client_tag: Optional[str] = Field(
         default=None,
         description="Optional tag indicating client source (e.g., luki_taster_widget)"
+    )
+    wallet: Optional[WalletContext] = Field(
+        default=None,
+        description="Optional wallet/on-chain context for token-gated experiences"
+    )
+    persona_id: Optional[str] = Field(
+        default=None,
+        description="Optional persona identifier (e.g. 'default', 'lukicool', 'lukia', or genesis-*) used by the core agent to select LUKi's personality"
     )
     
     class Config:
@@ -570,34 +707,46 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
         # User-specific search (only if authenticated)
         if not is_anonymous(chat_request.user_id, chat_request.client_tag):
             try:
-                memory_client = MemoryServiceClient()
-                
-                # Check if user is asking to list memories
-                msg_lower = latest_message.content.lower()
-                is_listing_memories = any(phrase in msg_lower for phrase in [
-                    "list my memories", "show my memories", "what do you remember",
-                    "my saved memories", "list saved memories", "show saved memories",
-                    "what memories", "retrieve memories", "get my memories",
-                    "tell me my memories", "all of them", "all my memories",
-                    "what are my memories", "show me my memories"
-                ])
-                
-                if is_listing_memories:
-                    # Get ALL memories for listing
-                    logger.info("User requesting to list all memories")
-                    user_query = ELRQueryRequest(
-                        user_id=chat_request.user_id,
-                        query=" ",  # Use space to get all memories
-                        k=50  # Get more memories for listing
+                policy_result = await enforce_policy_scopes(
+                    user_id=chat_request.user_id,
+                    requested_scopes=["elr_memories"],
+                    requester_role="api_gateway",
+                    context={"operation": "chat_memory_retrieval"},
+                )
+                if not policy_result.get("allowed", False):
+                    logger.info(
+                        "Skipping memory retrieval in chat due to consent policy for user %s",
+                        chat_request.user_id,
                     )
                 else:
-                    # Normal semantic search for relevant memories
-                    user_query = ELRQueryRequest(
-                        user_id=chat_request.user_id,
-                        query=latest_message.content,
-                        k=5
-                    )
-                tasks.append(memory_client.search_elr_items(user_query))
+                    memory_client = MemoryServiceClient()
+                    
+                    # Check if user is asking to list memories
+                    msg_lower = latest_message.content.lower()
+                    is_listing_memories = any(phrase in msg_lower for phrase in [
+                        "list my memories", "show my memories", "what do you remember",
+                        "my saved memories", "list saved memories", "show saved memories",
+                        "what memories", "retrieve memories", "get my memories",
+                        "tell me my memories", "all of them", "all my memories",
+                        "what are my memories", "show me my memories"
+                    ])
+                    
+                    if is_listing_memories:
+                        # Get ALL memories for listing
+                        logger.info("User requesting to list all memories")
+                        user_query = ELRQueryRequest(
+                            user_id=chat_request.user_id,
+                            query=" ",  # Use space to get all memories
+                            k=50  # Get more memories for listing
+                        )
+                    else:
+                        # Normal semantic search for relevant memories
+                        user_query = ELRQueryRequest(
+                            user_id=chat_request.user_id,
+                            query=latest_message.content,
+                            k=5
+                        )
+                    tasks.append(memory_client.search_elr_items(user_query))
             except Exception as e:
                 logger.warning(f"Unable to init user memory query: {e}")
         else:
@@ -620,18 +769,30 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
             except Exception as e:
                 logger.warning(f"Memory retrieval gather failed: {e}")
 
-        # Prepare agent request with memory context
+        # Prepare agent request with memory and optional wallet context
+        agent_context: Dict[str, Any] = {
+            "conversation_history": [
+                {"role": msg.role, "content": msg.content}
+                for msg in chat_request.messages[:-1]  # Exclude the latest message
+            ],
+            "memory_context": memory_context,
+        }
+        if chat_request.wallet is not None:
+            try:
+                agent_context["wallet"] = chat_request.wallet.model_dump()
+            except Exception:
+                # Defensive: if model_dump is unavailable, fall back to best-effort repr
+                agent_context["wallet"] = chat_request.wallet.dict() if hasattr(chat_request.wallet, "dict") else {}
+
+        # Pass persona_id through to core agent so it can select the correct prompt stack
+        if chat_request.persona_id:
+            agent_context["persona_id"] = chat_request.persona_id
+
         agent_request = AgentChatRequest(
             message=latest_message.content,
             user_id=chat_request.user_id,
             session_id=chat_request.session_id,
-            context={
-                "conversation_history": [
-                    {"role": msg.role, "content": msg.content} 
-                    for msg in chat_request.messages[:-1]  # Exclude the latest message
-                ],
-                "memory_context": memory_context
-            }
+            context=agent_context,
         )
         
         # Call the core agent
@@ -796,13 +957,25 @@ async def chat_stream_endpoint(chat_request: ChatRequest, request: Request):
             memory_client = None
             if not is_anonymous(chat_request.user_id, chat_request.client_tag):
                 try:
-                    memory_client = MemoryServiceClient()
-                    user_query = ELRQueryRequest(
+                    policy_result = await enforce_policy_scopes(
                         user_id=chat_request.user_id,
-                        query=latest_message.content,
-                        k=5
+                        requested_scopes=["elr_memories"],
+                        requester_role="api_gateway",
+                        context={"operation": "chat_stream_memory_retrieval"},
                     )
-                    tasks.append(memory_client.search_elr_items(user_query))
+                    if not policy_result.get("allowed", False):
+                        logger.info(
+                            "Skipping memory retrieval in streaming chat due to consent policy for user %s",
+                            chat_request.user_id,
+                        )
+                    else:
+                        memory_client = MemoryServiceClient()
+                        user_query = ELRQueryRequest(
+                            user_id=chat_request.user_id,
+                            query=latest_message.content,
+                            k=5
+                        )
+                        tasks.append(memory_client.search_elr_items(user_query))
                 except Exception as e:
                     logger.warning(f"Unable to init user memory query (stream): {e}")
             else:
@@ -824,18 +997,28 @@ async def chat_stream_endpoint(chat_request: ChatRequest, request: Request):
                     logger.info(f"Retrieved total {len(memory_context)} user memory items for streaming")
                 except Exception as e:
                     logger.warning(f"Memory retrieval gather (stream) failed: {e}")
-            # Prepare agent request with memory context
+            # Prepare agent request with memory and optional wallet context
+            agent_context: Dict[str, Any] = {
+                "conversation_history": [
+                    {"role": msg.role, "content": msg.content}
+                    for msg in chat_request.messages[:-1]
+                ],
+                "memory_context": memory_context,
+            }
+            if chat_request.wallet is not None:
+                try:
+                    agent_context["wallet"] = chat_request.wallet.model_dump()
+                except Exception:
+                    agent_context["wallet"] = chat_request.wallet.dict() if hasattr(chat_request.wallet, "dict") else {}
+
+            if chat_request.persona_id:
+                agent_context["persona_id"] = chat_request.persona_id
+
             agent_request = AgentChatRequest(
                 message=latest_message.content,
                 user_id=chat_request.user_id,
                 session_id=chat_request.session_id,
-                context={
-                    "conversation_history": [
-                        {"role": msg.role, "content": msg.content} 
-                        for msg in chat_request.messages[:-1]
-                    ],
-                    "memory_context": memory_context
-                }
+                context=agent_context,
             )
             
             # Stream response directly from agent; sanitization is handled by the core agent.
