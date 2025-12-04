@@ -11,7 +11,11 @@ import asyncio
 import uuid
 import os
 from luki_api.config import settings
-from luki_api.clients.agent_client import agent_client, AgentChatRequest
+from luki_api.clients.agent_client import (
+    agent_client,
+    AgentChatRequest,
+    AgentPhotoReminiscenceImageRequest,
+)
 from luki_api.clients.memory_service import MemoryServiceClient, ELRQueryRequest
 from luki_api.clients.security_service import enforce_policy_scopes
 from luki_api.routes.memories import _invalidate_user_memories_cache
@@ -648,6 +652,26 @@ class ChatResponse(BaseModel):
             }
         }
 
+
+class PhotoReminiscenceImageRequest(BaseModel):
+    """Schema for photo reminiscence image generation via gateway"""
+
+    user_id: str = Field(
+        description="Unique identifier for the user",
+        examples=["user123"],
+    )
+    activity_title: Optional[str] = Field(
+        default=None,
+        description="Optional title of the activity (e.g. 'Personal Photo Reminiscence')",
+    )
+    answers: List[str] = Field(
+        description="List of text answers collected during the activity (1-4 items)",
+    )
+    n: Optional[int] = Field(
+        default=1,
+        description="Number of images to generate (default 1, max 4)",
+    )
+
 @router.post("/chat", 
          response_model=ChatResponse,
          status_code=status.HTTP_200_OK,
@@ -903,6 +927,59 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error"
         )
+
+
+@router.post(
+    "/reme/photo-reminiscence-images",
+    status_code=status.HTTP_200_OK,
+    summary="Generate images for the Photo Reminiscence activity",
+    description=(
+        "Generate one or more images based on the user's answers in the "
+        "Photo Reminiscence ReMe Made. This proxies to the core agent, which "
+        "in turn calls the cognitive module's image service."
+    ),
+)
+async def photo_reminiscence_images_endpoint(
+    image_request: PhotoReminiscenceImageRequest,
+):
+    if not image_request.answers:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one answer is required",
+        )
+
+    try:
+        agent_request = AgentPhotoReminiscenceImageRequest(
+            user_id=image_request.user_id,
+            activity_title=image_request.activity_title,
+            answers=image_request.answers,
+            n=image_request.n or 1,
+        )
+        result = await agent_client.photo_reminiscence_images(agent_request)
+        return result
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            "Agent photo reminiscence images HTTP error: %s - %s",
+            e.response.status_code,
+            e.response.text,
+        )
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail="Agent image generation error",
+        )
+    except httpx.RequestError as e:
+        logger.error("Agent photo reminiscence images request error: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not reach agent image generation service",
+        )
+    except Exception as e:
+        logger.error("Unexpected error in photo reminiscence images endpoint: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unexpected error during image generation",
+        )
+
 
 @router.post("/chat/stream",
          summary="Streaming Chat with LUKi Agent",
