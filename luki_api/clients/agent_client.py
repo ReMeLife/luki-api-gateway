@@ -27,6 +27,14 @@ class AgentChatRequest(BaseModel):
     session_id: Optional[str] = None
     context: Optional[Dict[str, Any]] = None
 
+
+class AgentPhotoReminiscenceImageRequest(BaseModel):
+    """Request format for photo reminiscence image generation"""
+    user_id: str
+    activity_title: Optional[str] = None
+    answers: List[str]
+    n: Optional[int] = 1
+
 class AgentChatResponse(BaseModel):
     """Response format from agent chat endpoint"""
     response: str
@@ -109,11 +117,44 @@ class AgentClient:
         except httpx.HTTPStatusError as e:
             logger.error(f"Agent service HTTP error: {e.response.status_code} - {e.response.text}")
             raise
+    
+    async def photo_reminiscence_images(
+        self, request: AgentPhotoReminiscenceImageRequest
+    ) -> Dict[str, Any]:
+        """Call the core agent to generate images for the Photo Reminiscence activity."""
+        try:
+            payload = request.dict()
+            logger.info(
+                "Sending photo reminiscence image request to agent for user: %s",
+                request.user_id,
+            )
+            response = await self.client.post(
+                f"{self.base_url}/v1/reme/photo-reminiscence-images",
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "User-Agent": "LUKi-API-Gateway/0.2.0",
+                },
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                "Agent service HTTP error (photo reminiscence images): %s - %s",
+                e.response.status_code,
+                e.response.text,
+            )
+            raise
         except httpx.RequestError as e:
-            logger.error(f"Agent service request error: {e}")
+            logger.error(
+                "Agent service request error (photo reminiscence images): %s", e
+            )
             raise
         except Exception as e:
-            logger.error(f"Unexpected error in agent chat: {e}")
+            logger.error(
+                "Unexpected error in agent photo reminiscence images call: %s", e
+            )
             raise
     
     async def chat_stream(self, request: AgentChatRequest) -> AsyncGenerator[str, None]:
