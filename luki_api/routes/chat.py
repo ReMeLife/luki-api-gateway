@@ -958,14 +958,30 @@ async def photo_reminiscence_images_endpoint(
         result = await agent_client.photo_reminiscence_images(agent_request)
         return result
     except httpx.HTTPStatusError as e:
+        # Preserve structured detail from the core agent so the frontend can
+        # distinguish rate limits (429) from generic failures.
+        try:
+            try:
+                raw = e.response.json()
+            except ValueError:
+                raw = {"detail": e.response.text}
+
+            if isinstance(raw, dict):
+                container = raw
+                inner = container.get("detail", raw)
+            else:
+                inner = {"message": str(raw)}
+        except Exception:
+            inner = {"message": "Agent image generation error"}
+
         logger.error(
             "Agent photo reminiscence images HTTP error: %s - %s",
             e.response.status_code,
-            e.response.text,
+            inner,
         )
         raise HTTPException(
             status_code=e.response.status_code,
-            detail="Agent image generation error",
+            detail=inner,
         )
     except httpx.RequestError as e:
         logger.error("Agent photo reminiscence images request error: %s", e)
