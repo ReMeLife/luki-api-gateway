@@ -8,6 +8,7 @@ import logging
 import json
 import re
 import asyncio
+import time
 import uuid
 import os
 from luki_api.config import settings
@@ -794,9 +795,21 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
             session_id=chat_request.session_id,
             context=agent_context,
         )
-        
-        # Call the core agent
+
+        # Call the core agent with timing for debugging
+        logger.info(
+            "Calling agent service for user %s with session_id=%s",
+            chat_request.user_id,
+            chat_request.session_id,
+        )
+        start_agent = time.monotonic()
         agent_response = await agent_client.chat(agent_request)
+        agent_elapsed_ms = (time.monotonic() - start_agent) * 1000
+        logger.info(
+            "Agent service call completed in %.1fms for user %s",
+            agent_elapsed_ms,
+            chat_request.user_id,
+        )
         
         # 🔥 TRUE FIRE-AND-FORGET: Launch memory detection without waiting
         if not is_anonymous(chat_request.user_id, chat_request.client_tag):

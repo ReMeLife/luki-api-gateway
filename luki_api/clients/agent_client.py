@@ -9,6 +9,8 @@ luki-core-agent service for chat conversations and agent orchestration.
 import httpx
 import logging
 import json
+import time
+import uuid
 from typing import Dict, List, Optional, Any, AsyncGenerator
 from pydantic import BaseModel
 from luki_api.config import settings
@@ -74,9 +76,14 @@ class AgentClient:
             httpx.HTTPStatusError: If the agent service returns an error
             httpx.RequestError: If there's a network/connection error
         """
+        req_id = uuid.uuid4().hex[:8]
+        url = f"{self.base_url}/v1/chat"
         try:
-            logger.info(f"Sending chat request to agent for user: {request.user_id}")
-            
+            logger.info(
+                f"[AgentClient.chat] req_id={req_id} user_id={request.user_id} "
+                f"url={url} timeout={self.client.timeout}"
+            )
+
             # Prepare the request payload for the core agent
             payload = {
                 "message": request.message,
@@ -84,9 +91,10 @@ class AgentClient:
                 "session_id": request.session_id,
                 "context": request.context or {}
             }
-            
+
+            start = time.monotonic()
             response = await self.client.post(
-                f"{self.base_url}/v1/chat",
+                url,
                 json=payload,
                 headers={
                     "Content-Type": "application/json",
@@ -94,26 +102,41 @@ class AgentClient:
                     "User-Agent": "LUKi-API-Gateway/0.2.0"
                 }
             )
-            
+            elapsed_ms = (time.monotonic() - start) * 1000
+
+            logger.info(
+                f"[AgentClient.chat] req_id={req_id} completed in {elapsed_ms:.1f}ms "
+                f"with status={response.status_code}"
+            )
+
             response.raise_for_status()
             response_data = response.json()
-            
-            logger.info(f"Received response from agent for user: {request.user_id}")
-            
+
+            logger.info(f"[AgentClient.chat] req_id={req_id} received response for user: {request.user_id}")
+
             return AgentChatResponse(
                 response=response_data.get("response", ""),
                 session_id=response_data.get("session_id", request.session_id or "new-session"),
                 metadata=response_data.get("metadata", {})
             )
-            
+
         except httpx.HTTPStatusError as e:
-            logger.error(f"Agent service HTTP error: {e.response.status_code} - {e.response.text}")
+            status = e.response.status_code if e.response is not None else "unknown"
+            text = e.response.text if e.response is not None else "<no body>"
+            logger.error(
+                f"[AgentClient.chat] req_id={req_id} HTTPStatusError status={status}: {text}"
+            )
             raise
         except httpx.RequestError as e:
-            logger.error(f"Agent service request error: {e}")
+            req = getattr(e, "request", None)
+            req_url = getattr(req, "url", None)
+            logger.error(
+                f"[AgentClient.chat] req_id={req_id} RequestError type={type(e).__name__} "
+                f"url={req_url} detail={e}"
+            )
             raise
         except Exception as e:
-            logger.error(f"Unexpected error in agent chat: {e}")
+            logger.error(f"[AgentClient.chat] req_id={req_id} Unexpected error in agent chat: {e}")
             raise
     
     async def chat_stream(self, request: AgentChatRequest) -> AsyncGenerator[str, None]:
