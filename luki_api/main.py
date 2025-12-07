@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from luki_api.routes import chat, elr, health, metrics, conversation, memories, conversations
+from luki_api.routes import chat, elr, health, metrics, conversation, memories, conversations, cognitive
 from luki_api.middleware import auth, rate_limit, logging, metrics as metrics_middleware
 from luki_api.config import settings
 from luki_api.clients.agent_client import agent_client
@@ -89,6 +89,7 @@ app.include_router(memories.router, prefix="", tags=["memories"])  # Includes /a
 app.include_router(conversations.router, prefix="", tags=["conversations"])  # Includes /api/conversations prefix
 app.include_router(elr.router, prefix="/v1/elr", tags=["elr"])
 app.include_router(metrics.router, prefix="/metrics", tags=["metrics"])
+app.include_router(cognitive.router, prefix="", tags=["cognitive"])  # Life Story and cognitive module routes
 
 @app.on_event("startup")
 async def startup_event():
@@ -96,6 +97,7 @@ async def startup_event():
     logger.info("Starting LUKi API Gateway...")
     logger.info(f"Agent service URL: {settings.AGENT_SERVICE_URL}")
     logger.info(f"Memory service URL: {settings.MEMORY_SERVICE_URL}")
+    logger.info(f"Cognitive service URL: {settings.COGNITIVE_SERVICE_URL}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
