@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     AGENT_SERVICE_URL: str = os.getenv("LUKI_CORE_AGENT_URL", "http://localhost:9000")
     AGENT_SERVICE_TIMEOUT: int = 240  # Extended timeout to align with core-agent structured output
     
+    # Cognitive module settings - Railway deployment URLs
+    COGNITIVE_SERVICE_URL: str = os.getenv("LUKI_COGNITIVE_SERVICE_URL", "http://localhost:8101")
+    COGNITIVE_SERVICE_TIMEOUT: int = 60
+    
     # Security service settings - Railway deployment URLs
     SECURITY_SERVICE_URL: str = os.getenv("LUKI_SECURITY_SERVICE_URL", "http://localhost:8103")
     SECURITY_SERVICE_TIMEOUT: int = 30
