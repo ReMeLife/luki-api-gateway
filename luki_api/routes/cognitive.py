@@ -28,6 +28,10 @@ class ContinueLifeStoryRequest(BaseModel):
     skip_phase: bool = False
     approximate_date: Optional[str] = None
 
+class FinishLifeStoryRequest(BaseModel):
+    user_id: str
+    session_id: str
+
 
 async def _proxy_to_cognitive(
     method: str,
@@ -119,6 +123,28 @@ async def continue_life_story(request: ContinueLifeStoryRequest):
             "response_text": request.response_text,
             "skip_phase": request.skip_phase,
             "approximate_date": request.approximate_date,
+        },
+    )
+
+
+@router.post("/life-story/finish-early")
+async def finish_life_story_early(request: FinishLifeStoryRequest):
+    """
+    Finish a life story session early, saving whatever chapters have been recorded.
+    
+    Proxies to the cognitive module's /life-story/finish-early endpoint.
+    """
+    logger.info(
+        "Finishing life story session early: %s... for user: %s...",
+        request.session_id[:8],
+        request.user_id[:8],
+    )
+    return await _proxy_to_cognitive(
+        method="POST",
+        path="/life-story/finish-early",
+        json_body={
+            "user_id": request.user_id,
+            "session_id": request.session_id,
         },
     )
 
