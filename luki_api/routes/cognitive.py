@@ -32,6 +32,11 @@ class FinishLifeStoryRequest(BaseModel):
     user_id: str
     session_id: str
 
+class UpdateLifeStoryImagesRequest(BaseModel):
+    user_id: str
+    session_id: str
+    images: dict  # {chapter_index: base64_image_data}
+
 
 async def _proxy_to_cognitive(
     method: str,
@@ -50,6 +55,8 @@ async def _proxy_to_cognitive(
                 response = await client.post(url, json=json_body)
             elif method == "DELETE":
                 response = await client.delete(url, params=params)
+            elif method == "PATCH":
+                response = await client.patch(url, json=json_body)
             else:
                 raise ValueError(f"Unsupported method: {method}")
             
@@ -193,4 +200,27 @@ async def get_life_story_phases():
     return await _proxy_to_cognitive(
         method="GET",
         path="/life-story/phases",
+    )
+
+
+@router.patch("/life-story/update-images")
+async def update_life_story_images(request: UpdateLifeStoryImagesRequest):
+    """
+    Update a life story session with generated images.
+    
+    Saves image URLs/data for each chapter of a completed life story.
+    """
+    logger.info(
+        "Updating life story images for session: %s... user: %s...",
+        request.session_id[:8] if request.session_id else "N/A",
+        request.user_id[:8] if request.user_id else "N/A",
+    )
+    return await _proxy_to_cognitive(
+        method="PATCH",
+        path="/life-story/update-images",
+        json_body={
+            "user_id": request.user_id,
+            "session_id": request.session_id,
+            "images": request.images,
+        },
     )
