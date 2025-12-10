@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     ENABLE_STREAMING: bool = True
     STREAM_CHUNK_SIZE: int = 1024
     
+    # Solana wallet / NFT settings
+    HELIUS_API_KEY: str = os.getenv("HELIUS_API_KEY", "")
+    GENESIS_LUKI_COLLECTION_ADDRESS: str = os.getenv("GENESIS_LUKI_COLLECTION_ADDRESS", "")
+    
     # Logging settings
     LOG_LEVEL: str = "INFO"
     STRUCTURED_LOGGING: bool = True
