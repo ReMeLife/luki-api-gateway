@@ -17,25 +17,34 @@ from nacl.exceptions import BadSignatureError
 
 logger = logging.getLogger(__name__)
 
+# Solana network configuration (devnet or mainnet-beta)
+# Use devnet for testing, mainnet-beta for production
+SOLANA_NETWORK = os.getenv("SOLANA_NETWORK", "devnet")  # Default to devnet for testing
+
 # Genesis LUKi NFT Collection configuration
-# This will be set to the actual collection address once deployed
 GENESIS_COLLECTION_ADDRESS = os.getenv(
     "GENESIS_LUKI_COLLECTION_ADDRESS",
-    ""  # To be set when Genesis collection is deployed
+    "5nbtm61GoC6ZqFdZNDnXBmS18qjRYdK7rZcQfTdGgoCH"  # Devnet collection for testing
 )
 
 # Helius API for NFT queries (faster than raw RPC)
 HELIUS_API_KEY = os.getenv("HELIUS_API_KEY", "")
-HELIUS_RPC_URL = os.getenv(
-    "HELIUS_RPC_URL",
-    f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}" if HELIUS_API_KEY else ""
-)
 
-# Fallback to public Solana RPC
-SOLANA_RPC_URL = os.getenv(
-    "SOLANA_RPC_URL",
-    "https://api.mainnet-beta.solana.com"
-)
+# Network-aware RPC URLs
+def get_helius_url() -> str:
+    if not HELIUS_API_KEY:
+        return ""
+    if SOLANA_NETWORK == "devnet":
+        return f"https://devnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
+    return f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
+
+def get_solana_url() -> str:
+    if SOLANA_NETWORK == "devnet":
+        return "https://api.devnet.solana.com"
+    return "https://api.mainnet-beta.solana.com"
+
+HELIUS_RPC_URL = os.getenv("HELIUS_RPC_URL", get_helius_url())
+SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL", get_solana_url())
 
 
 class WalletVerificationRequest(BaseModel):
@@ -326,7 +335,9 @@ class WalletClient:
         personas: List[str] = []
         for nft in holdings:
             if nft.token_id:
-                personas.append(f"genesis-{nft.token_id}")
+                # NFT names are 1-indexed ("LUKi #595") but persona files are 0-indexed (genesis-594)
+                persona_index = nft.token_id - 1
+                personas.append(f"genesis-{persona_index}")
         
         return personas
     
@@ -355,16 +366,19 @@ class WalletClient:
                 if n.collection_address == self.genesis_collection
             ]
         
-        personas = [f"genesis-{n.token_id}" for n in genesis_nfts if n.token_id]
+        # NFT names are 1-indexed ("LUKi #595") but persona files are 0-indexed (genesis-594)
+        personas = [f"genesis-{n.token_id - 1}" for n in genesis_nfts if n.token_id]
         
         # Build avatar assets map
         # In production, these would come from a metadata service
         avatar_assets: Dict[str, str] = {}
         for nft in genesis_nfts:
             if nft.token_id:
-                persona_id = f"genesis-{nft.token_id}"
+                # NFT names are 1-indexed but persona/asset files are 0-indexed
+                persona_index = nft.token_id - 1
+                persona_id = f"genesis-{persona_index}"
                 # Placeholder - would be replaced with actual asset URLs
-                avatar_assets[persona_id] = f"/avatars/genesis/{nft.token_id:04d}.png"
+                avatar_assets[persona_id] = f"/avatars/genesis/{persona_index:04d}.png"
         
         return WalletEntitlements(
             wallet_address=wallet_address,

@@ -610,6 +610,10 @@ class ChatRequest(BaseModel):
         default=None,
         description="Optional persona identifier (e.g. 'default', 'lukicool', 'lukia', or genesis-*) used by the core agent to select LUKi's personality"
     )
+    world_day_context: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional world day context with name, description, fun_fact, and emoji for today's special day"
+    )
     
     class Config:
         schema_extra = {
@@ -812,6 +816,10 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
         # Pass persona_id through to core agent so it can select the correct prompt stack
         if chat_request.persona_id:
             agent_context["persona_id"] = chat_request.persona_id
+
+        # Pass world day context for AI awareness of today's special day
+        if chat_request.world_day_context:
+            agent_context["world_day"] = chat_request.world_day_context
 
         agent_request = AgentChatRequest(
             message=latest_message.content,
@@ -1119,6 +1127,10 @@ async def chat_stream_endpoint(chat_request: ChatRequest, request: Request):
 
             if chat_request.persona_id:
                 agent_context["persona_id"] = chat_request.persona_id
+
+            # Pass world day context for AI awareness of today's special day
+            if chat_request.world_day_context:
+                agent_context["world_day"] = chat_request.world_day_context
 
             agent_request = AgentChatRequest(
                 message=latest_message.content,
