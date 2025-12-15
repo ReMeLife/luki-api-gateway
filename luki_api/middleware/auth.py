@@ -46,13 +46,13 @@ async def auth_middleware(request: Request, call_next: Callable):
     
     # Skip auth for health checks, root path, test endpoints, and anonymous chat
     skip_paths = ["/health", "/health/", "/", "/docs", "/openapi.json", "/redoc"]
-    skip_prefixes = ["/api/chat", "/test", "/api/conversation/history", "/api/conversations"]  # Allow iframe to load conversations
+    skip_prefixes = ["/api/chat", "/test", "/api/conversation/history", "/api/conversations", "/api/reme/photo-reminiscence-images", "/api/cognitive", "/api/wallet"]  # Allow iframe to load conversations, cognitive activities, and wallet verification
     
     # Debug logging for conversations endpoint
     if "/api/conversations" in request.url.path and "/messages/" in request.url.path:
-        logger.info(f"🔍 Auth Middleware: Conversations messages request detected")
-        logger.info(f"🔍 Path: {request.url.path}")
-        logger.info(f"🔍 Method: {request.method}")
+        logger.info(f" Auth Middleware: Conversations messages request detected")
+        logger.info(f" Path: {request.url.path}")
+        logger.info(f" Method: {request.method}")
     
     # Allow anonymous access but set user context
     if any(request.url.path.startswith(prefix) for prefix in skip_prefixes):

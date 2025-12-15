@@ -1,9 +1,10 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from luki_api.routes import chat, elr, health, metrics, conversation, memories, conversations
+from luki_api.routes import chat, elr, health, metrics, conversation, memories, conversations, cognitive, wallet
 from luki_api.middleware import auth, rate_limit, logging, metrics as metrics_middleware
 from luki_api.config import settings
 from luki_api.clients.agent_client import agent_client
+from luki_api.clients.wallet_client import wallet_client
 import logging as python_logging
 
 # Configure logging
@@ -89,6 +90,8 @@ app.include_router(memories.router, prefix="", tags=["memories"])  # Includes /a
 app.include_router(conversations.router, prefix="", tags=["conversations"])  # Includes /api/conversations prefix
 app.include_router(elr.router, prefix="/v1/elr", tags=["elr"])
 app.include_router(metrics.router, prefix="/metrics", tags=["metrics"])
+app.include_router(cognitive.router, prefix="", tags=["cognitive"])  # Life Story and cognitive module routes
+app.include_router(wallet.router, prefix="/api", tags=["wallet"])  # Wallet verification and NFT entitlements
 
 @app.on_event("startup")
 async def startup_event():
@@ -96,6 +99,8 @@ async def startup_event():
     logger.info("Starting LUKi API Gateway...")
     logger.info(f"Agent service URL: {settings.AGENT_SERVICE_URL}")
     logger.info(f"Memory service URL: {settings.MEMORY_SERVICE_URL}")
+    logger.info(f"Cognitive service URL: {settings.COGNITIVE_SERVICE_URL}")
+    logger.info(f"Wallet service configured: Helius={bool(wallet_client.helius_url)}, Genesis={bool(wallet_client.genesis_collection)}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -103,6 +108,8 @@ async def shutdown_event():
     logger.info("Shutting down LUKi API Gateway...")
     await agent_client.close()
     logger.info("Agent client closed")
+    await wallet_client.close()
+    logger.info("Wallet client closed")
 
 @app.get("/")
 async def root():
