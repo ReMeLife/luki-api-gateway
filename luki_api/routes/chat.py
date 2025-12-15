@@ -20,6 +20,7 @@ from luki_api.clients.agent_client import (
 from luki_api.clients.memory_service import MemoryServiceClient, ELRQueryRequest
 from luki_api.clients.security_service import enforce_policy_scopes
 from luki_api.routes.memories import _invalidate_user_memories_cache
+from luki_api.middleware.rate_limit import check_daily_message_limit, record_daily_message
 from datetime import datetime
 
 router = APIRouter()
@@ -614,6 +615,10 @@ class ChatRequest(BaseModel):
         default=None,
         description="Optional world day context with name, description, fun_fact, and emoji for today's special day"
     )
+    account_tier: Optional[str] = Field(
+        default="free",
+        description="User's subscription tier (free, plus, pro) - determines daily message limits"
+    )
     
     class Config:
         schema_extra = {
@@ -676,6 +681,10 @@ class PhotoReminiscenceImageRequest(BaseModel):
         default=1,
         description="Number of images to generate (default 1, max 4)",
     )
+    account_tier: Optional[str] = Field(
+        default="free",
+        description="User's subscription tier (free, plus, pro) - determines image generation limits",
+    )
 
 @router.post("/chat", 
          response_model=ChatResponse,
@@ -724,6 +733,15 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Latest message must be from user"
+            )
+        
+        # Check daily message limit based on account tier
+        account_tier = (chat_request.account_tier or "free").lower()
+        rate_limit_error = await check_daily_message_limit(chat_request.user_id, account_tier)
+        if rate_limit_error:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=rate_limit_error
             )
         
         # Determine anonymity across all cases
@@ -911,6 +929,9 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
             conversation_id=conversation_id
         )
         
+        # Record the message for daily rate limiting
+        await record_daily_message(chat_request.user_id)
+        
         # Return the conversation_id as session_id for frontend to use
         # This ensures conversation continuity
         return ChatResponse(
@@ -975,6 +996,7 @@ async def photo_reminiscence_images_endpoint(
             activity_title=image_request.activity_title,
             answers=image_request.answers,
             n=image_request.n or 1,
+            account_tier=image_request.account_tier or "free",
         )
         result = await agent_client.photo_reminiscence_images(agent_request)
         return result
