@@ -36,6 +36,7 @@ class AgentPhotoReminiscenceImageRequest(BaseModel):
     activity_title: Optional[str] = None
     answers: List[str]
     n: Optional[int] = 1
+    account_tier: Optional[str] = "free"  # free, plus, pro - determines image generation limits
 
 class AgentChatResponse(BaseModel):
     """Response format from agent chat endpoint"""
