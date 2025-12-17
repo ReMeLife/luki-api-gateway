@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from luki_api.routes import chat, elr, health, metrics, conversation, memories, conversations, cognitive, wallet
+from luki_api.routes import chat, elr, health, metrics, conversation, memories, conversations, cognitive, wallet, uploads
 from luki_api.middleware import auth, rate_limit, logging, metrics as metrics_middleware
 from luki_api.config import settings
 from luki_api.clients.agent_client import agent_client
@@ -92,6 +92,7 @@ app.include_router(elr.router, prefix="/v1/elr", tags=["elr"])
 app.include_router(metrics.router, prefix="/metrics", tags=["metrics"])
 app.include_router(cognitive.router, prefix="", tags=["cognitive"])  # Life Story and cognitive module routes
 app.include_router(wallet.router, prefix="/api", tags=["wallet"])  # Wallet verification and NFT entitlements
+app.include_router(uploads.router, prefix="", tags=["uploads"])  # User uploads search and retrieval
 
 @app.on_event("startup")
 async def startup_event():
