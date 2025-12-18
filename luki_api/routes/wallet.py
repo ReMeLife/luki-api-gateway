@@ -21,6 +21,7 @@ import logging
 import secrets
 import time
 from datetime import datetime, timedelta
+import httpx
 
 from luki_api.clients.wallet_client import (
     wallet_client,
@@ -28,6 +29,7 @@ from luki_api.clients.wallet_client import (
     WalletVerificationResponse,
     WalletEntitlements,
 )
+from luki_api.config import settings
 
 router = APIRouter(prefix="/wallet", tags=["wallet"])
 logger = logging.getLogger(__name__)
@@ -256,3 +258,178 @@ async def wallet_health():
         "genesis_collection_configured": bool(wallet_client.genesis_collection),
         "pending_nonces": len(_nonce_store)
     }
+
+
+# =============================================================================
+# WALLET ENCRYPTION ENDPOINTS (Proxy to Security Service)
+# =============================================================================
+
+class EncryptionChallengeResponse(BaseModel):
+    """Response containing the challenge message to sign for encryption"""
+    challenge: Dict[str, Any]
+    instructions: str
+
+
+class WalletEncryptionRegisterRequest(BaseModel):
+    """Request to register wallet for encryption"""
+    user_id: str
+    wallet_public_key: str = Field(..., description="Solana public key (base58)")
+    signature: str = Field(..., description="Signature of challenge message (base64)")
+
+
+class WalletEncryptionDeriveRequest(BaseModel):
+    """Request to derive a new session key"""
+    user_id: str
+    wallet_public_key: str
+    signature: str
+
+
+def _get_security_service_url() -> str:
+    """Get the security service URL"""
+    return getattr(settings, "SECURITY_SERVICE_URL", None) or "http://localhost:8103"
+
+
+@router.get("/encryption/challenge/{user_id}")
+async def get_encryption_challenge(user_id: str):
+    """
+    Get the challenge message for wallet encryption registration.
+    
+    The user must sign this message with their Solana wallet to prove ownership
+    and enable wallet-derived encryption for their ELR data.
+    """
+    security_url = _get_security_service_url()
+    url = f"{security_url.rstrip('/')}/wallet/challenge/{user_id}"
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            logger.error(f"Security service error: {response.status_code}")
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=response.json() if response.text else "Failed to get challenge"
+            )
+    except httpx.RequestError as e:
+        logger.error(f"Security service request failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Security service unavailable"
+        )
+
+
+@router.post("/encryption/register")
+async def register_wallet_encryption(request: WalletEncryptionRegisterRequest):
+    """
+    Register a Solana wallet for encryption key derivation.
+    
+    After registration, the user's ELR memories will be encrypted with
+    a key derived from their wallet signature - only they can decrypt.
+    """
+    security_url = _get_security_service_url()
+    url = f"{security_url.rstrip('/')}/wallet/register"
+    
+    payload = {
+        "user_id": request.user_id,
+        "wallet_public_key": request.wallet_public_key,
+        "signature": request.signature,
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(url, json=payload)
+        
+        data = response.json()
+        
+        if response.status_code == 200:
+            logger.info(
+                f"Wallet registered for encryption: user={request.user_id}, "
+                f"wallet={request.wallet_public_key[:8]}..."
+            )
+            return data
+        else:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=data.get("detail", data)
+            )
+    except httpx.RequestError as e:
+        logger.error(f"Security service request failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Security service unavailable"
+        )
+
+
+@router.post("/encryption/derive-key")
+async def derive_encryption_key(request: WalletEncryptionDeriveRequest):
+    """
+    Derive a new session encryption key from wallet signature.
+    
+    Called when user needs to access their encrypted data.
+    The derived key is cached in memory for the session duration.
+    """
+    security_url = _get_security_service_url()
+    url = f"{security_url.rstrip('/')}/wallet/derive-key"
+    
+    payload = {
+        "user_id": request.user_id,
+        "wallet_public_key": request.wallet_public_key,
+        "signature": request.signature,
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(url, json=payload)
+        
+        data = response.json()
+        
+        if response.status_code == 200:
+            return data
+        else:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=data.get("detail", data)
+            )
+    except httpx.RequestError as e:
+        logger.error(f"Security service request failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Security service unavailable"
+        )
+
+
+@router.get("/encryption/status/{user_id}")
+async def get_encryption_status(user_id: str):
+    """
+    Get wallet encryption status for a user.
+    
+    Returns whether wallet encryption is enabled, registered wallet info,
+    and whether there's an active session key.
+    """
+    security_url = _get_security_service_url()
+    url = f"{security_url.rstrip('/')}/wallet/status/{user_id}"
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            # Return default status if security service fails
+            return {
+                "user_id": user_id,
+                "encryption_mode": "server",
+                "wallet_registered": False,
+                "has_active_session_key": False,
+            }
+    except httpx.RequestError as e:
+        logger.warning(f"Security service request failed: {e}")
+        return {
+            "user_id": user_id,
+            "encryption_mode": "server",
+            "wallet_registered": False,
+            "has_active_session_key": False,
+        }
