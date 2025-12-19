@@ -176,19 +176,10 @@ async def _search_supabase_uploads(
             except Exception as e:
                 logger.warning(f"⚠️ [UPLOADS] Description search failed: {e}")
     
-    # Strategy 2: If no results from term search, or no terms provided, get recent uploads
+    # If no results from term search, return empty - don't fall back to all files
+    # This prevents unrelated queries like "hey" from returning all uploads
     if not raw_items:
-        logger.info(f"🔍 [UPLOADS] No term matches found, fetching recent uploads")
-        try:
-            recent_result = supabase.table("elr_upload_items").select(select_fields).eq(
-                "user_id", user_id
-            ).order("created_at", desc=True).limit(limit).execute()
-            
-            if recent_result.data:
-                logger.info(f"🔍 [UPLOADS] Recent uploads: {len(recent_result.data)} items")
-                raw_items = recent_result.data
-        except Exception as e:
-            logger.error(f"❌ [UPLOADS] Recent uploads query failed: {e}")
+        logger.info(f"🔍 [UPLOADS] No matches found for search terms: {search_terms}")
     
     # Convert raw rows to UploadItem objects
     upload_items: List[UploadItem] = []
