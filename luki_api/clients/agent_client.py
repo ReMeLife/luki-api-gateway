@@ -28,6 +28,7 @@ class AgentChatRequest(BaseModel):
     user_id: str
     session_id: Optional[str] = None
     context: Optional[Dict[str, Any]] = None
+    file_search_mode: Optional[bool] = False  # Explicit file search intent from UI toggle
 
 
 class AgentPhotoReminiscenceImageRequest(BaseModel):
@@ -98,7 +99,8 @@ class AgentClient:
                 "message": request.message,
                 "user_id": request.user_id,
                 "session_id": request.session_id,
-                "context": request.context or {}
+                "context": request.context or {},
+                "file_search_mode": request.file_search_mode or False
             }
 
             start = time.monotonic()
