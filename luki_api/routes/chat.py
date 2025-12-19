@@ -619,6 +619,10 @@ class ChatRequest(BaseModel):
         default="free",
         description="User's subscription tier (free, plus, pro) - determines daily message limits"
     )
+    file_search_mode: Optional[bool] = Field(
+        default=False,
+        description="When true, triggers explicit file/upload search instead of normal chat"
+    )
     
     class Config:
         schema_extra = {
@@ -844,6 +848,7 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
             user_id=chat_request.user_id,
             session_id=chat_request.session_id,
             context=agent_context,
+            file_search_mode=chat_request.file_search_mode or False,
         )
 
         # Call the core agent with timing for debugging
@@ -1159,6 +1164,7 @@ async def chat_stream_endpoint(chat_request: ChatRequest, request: Request):
                 user_id=chat_request.user_id,
                 session_id=chat_request.session_id,
                 context=agent_context,
+                file_search_mode=chat_request.file_search_mode or False,
             )
             
             # Stream response directly from agent; sanitization is handled by the core agent.
