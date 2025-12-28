@@ -748,9 +748,9 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
                 detail=rate_limit_error
             )
         
-        # Determine anonymity across all cases
+        # Determine anonymity across all cases (skip memory for widget modes)
         def is_anonymous(uid: Optional[str], client_tag: Optional[str]) -> bool:
-            return (not uid) or uid == 'anonymous_base_user' or uid.startswith('anonymous_') or (client_tag == 'luki_taster_widget')
+            return (not uid) or uid == 'anonymous_base_user' or uid.startswith('anonymous_') or (client_tag == 'luki_taster_widget') or (client_tag == 'remelife_widget')
         # Retrieve memory context from memory service
         memory_context = []
         tasks = []
@@ -849,6 +849,7 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
             session_id=chat_request.session_id,
             context=agent_context,
             file_search_mode=chat_request.file_search_mode or False,
+            client_tag=chat_request.client_tag,  # Forward widget mode detection
         )
 
         # Call the core agent with timing for debugging
@@ -1091,7 +1092,7 @@ async def chat_stream_endpoint(chat_request: ChatRequest, request: Request):
             
             # Retrieve memory context from memory service for streaming - only if authenticated
             def is_anonymous(uid: Optional[str], client_tag: Optional[str]) -> bool:
-                return (not uid) or uid == 'anonymous_base_user' or uid.startswith('anonymous_') or (client_tag == 'luki_taster_widget')
+                return (not uid) or uid == 'anonymous_base_user' or uid.startswith('anonymous_') or (client_tag == 'luki_taster_widget') or (client_tag == 'remelife_widget')
 
             memory_context = []
             tasks = []
@@ -1165,6 +1166,7 @@ async def chat_stream_endpoint(chat_request: ChatRequest, request: Request):
                 session_id=chat_request.session_id,
                 context=agent_context,
                 file_search_mode=chat_request.file_search_mode or False,
+                client_tag=chat_request.client_tag,  # Forward widget mode detection
             )
             
             # Stream response directly from agent; sanitization is handled by the core agent.
