@@ -29,6 +29,7 @@ class AgentChatRequest(BaseModel):
     session_id: Optional[str] = None
     context: Optional[Dict[str, Any]] = None
     file_search_mode: Optional[bool] = False  # Explicit file search intent from UI toggle
+    client_tag: Optional[str] = None  # Widget mode detection (e.g., "remelife_widget")
 
 
 class AgentPhotoReminiscenceImageRequest(BaseModel):
@@ -100,7 +101,8 @@ class AgentClient:
                 "user_id": request.user_id,
                 "session_id": request.session_id,
                 "context": request.context or {},
-                "file_search_mode": request.file_search_mode or False
+                "file_search_mode": request.file_search_mode or False,
+                "client_tag": request.client_tag,  # Widget mode detection
             }
 
             start = time.monotonic()
@@ -212,7 +214,8 @@ class AgentClient:
                 "user_id": request.user_id,
                 "session_id": request.session_id,
                 "context": request.context or {},
-                "stream": True
+                "stream": True,
+                "client_tag": request.client_tag,  # Widget mode detection
             }
             
             async with self.client.stream(
