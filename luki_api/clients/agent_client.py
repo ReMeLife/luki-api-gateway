@@ -48,14 +48,17 @@ class AgentChatResponse(BaseModel):
 class AgentClient:
     """HTTP client for communicating with LUKi core agent service"""
     
-    def __init__(self, base_url: Optional[str] = None):
+    def __init__(self, base_url: Optional[str] = None, timeout: Optional[int] = None):
         self.base_url = base_url or settings.AGENT_SERVICE_URL
+        self.timeout = timeout or settings.AGENT_SERVICE_TIMEOUT
         self.client = httpx.AsyncClient(
-            timeout=httpx.Timeout(settings.AGENT_SERVICE_TIMEOUT),
+            timeout=httpx.Timeout(self.timeout),
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10)
         )
+        self.max_retries = 2
+        self.retry_delay = 1.0
         logger.info(f"AgentClient initialized with base_url: {self.base_url}")
-        logger.info(f"Agent service timeout: {settings.AGENT_SERVICE_TIMEOUT}s")
+        logger.info(f"Agent service timeout: {self.timeout}s")
     
     async def __aenter__(self):
         return self
@@ -66,8 +69,17 @@ class AgentClient:
     async def health_check(self) -> bool:
         """Check if the agent service is healthy"""
         try:
-            response = await self.client.get(f"{self.base_url}/health")
+            response = await self.client.get(
+                f"{self.base_url}/health",
+                timeout=10.0
+            )
             return response.status_code == 200
+        except httpx.TimeoutException:
+            logger.error(f"Agent health check timed out after 10s")
+            return False
+        except httpx.ConnectError as e:
+            logger.error(f"Agent health check connection failed: {e}")
+            return False
         except Exception as e:
             logger.error(f"Agent health check failed: {e}")
             return False
