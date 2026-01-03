@@ -69,3 +69,82 @@ class Settings(BaseSettings):
         env_prefix = "LUKI_API_"
 
 settings = Settings()
+
+
+def validate_service_urls() -> list[str]:
+    """
+    Validate all service URLs are properly configured.
+    
+    Returns:
+        List of validation warnings
+    """
+    warnings = []
+    
+    service_urls = {
+        "Memory Service": settings.MEMORY_SERVICE_URL,
+        "Agent Service": settings.AGENT_SERVICE_URL,
+        "Cognitive Service": settings.COGNITIVE_SERVICE_URL,
+        "Security Service": settings.SECURITY_SERVICE_URL,
+    }
+    
+    for service_name, url in service_urls.items():
+        if not url:
+            warnings.append(f"{service_name} URL is not configured")
+        elif not url.startswith(("http://", "https://")):
+            warnings.append(f"{service_name} URL missing protocol: {url}")
+        elif url.endswith("/"):
+            warnings.append(f"{service_name} URL should not end with '/': {url}")
+    
+    return warnings
+
+
+def get_cors_origins() -> list[str]:
+    """
+    Get parsed CORS origins with validation.
+    
+    Returns:
+        List of allowed CORS origins
+    """
+    origins = settings.allowed_origins_list
+    
+    # Filter out empty strings
+    origins = [o for o in origins if o.strip()]
+    
+    # Warn about wildcard in production
+    if "*" in origins:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning("CORS wildcard (*) is enabled - not recommended for production")
+    
+    return origins
+
+
+def is_production_environment() -> bool:
+    """
+    Check if running in production environment.
+    
+    Returns:
+        True if production, False otherwise
+    """
+    import os
+    env = os.getenv("ENVIRONMENT", "production").lower()
+    return env == "production"
+
+
+def get_service_timeout(service_name: str) -> int:
+    """
+    Get timeout for a specific service.
+    
+    Args:
+        service_name: Name of the service
+    
+    Returns:
+        Timeout in seconds
+    """
+    timeouts = {
+        "memory": settings.MEMORY_SERVICE_TIMEOUT,
+        "agent": settings.AGENT_SERVICE_TIMEOUT,
+        "cognitive": settings.COGNITIVE_SERVICE_TIMEOUT,
+        "security": settings.SECURITY_SERVICE_TIMEOUT,
+    }
+    return timeouts.get(service_name.lower(), 30)
