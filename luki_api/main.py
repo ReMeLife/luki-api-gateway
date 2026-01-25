@@ -72,12 +72,18 @@ async def custom_cors_middleware(request: Request, call_next):
     
     return response
 
+# Import correlation middleware
+from luki_api.middleware import correlation
+
 # Order matters! Register in reverse order (last registered = runs first)
-# Register other middleware first (they'll run after CORS)
+# Register other middleware first (they'll run after CORS and correlation)
 app.middleware("http")(rate_limit.rate_limit_middleware)
 app.middleware("http")(auth.auth_middleware)
 app.middleware("http")(metrics_middleware.metrics_middleware)
 app.middleware("http")(logging.request_logging_middleware)
+
+# Register correlation middleware before CORS (runs after CORS)
+app.middleware("http")(correlation.correlation_middleware)
 
 # Register CORS middleware LAST so it runs FIRST
 app.middleware("http")(custom_cors_middleware)
