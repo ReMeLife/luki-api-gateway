@@ -105,15 +105,20 @@ class AgentClient:
                 "client_tag": request.client_tag,  # Widget mode detection
             }
 
+            # Build headers with internal API secret for service-to-service auth
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "LUKi-API-Gateway/0.2.0"
+            }
+            if settings.INTERNAL_API_SECRET:
+                headers["X-Internal-Secret"] = settings.INTERNAL_API_SECRET
+
             start = time.monotonic()
             response = await self.client.post(
                 url,
                 json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "User-Agent": "LUKi-API-Gateway/0.2.0"
-                }
+                headers=headers
             )
             elapsed_ms = (time.monotonic() - start) * 1000
 
@@ -162,14 +167,19 @@ class AgentClient:
                 "Sending photo reminiscence image request to agent for user: %s",
                 request.user_id,
             )
+            # Build headers with internal API secret for service-to-service auth
+            img_headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "LUKi-API-Gateway/0.2.0",
+            }
+            if settings.INTERNAL_API_SECRET:
+                img_headers["X-Internal-Secret"] = settings.INTERNAL_API_SECRET
+
             response = await self.client.post(
                 f"{self.base_url}/v1/reme/photo-reminiscence-images",
                 json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "User-Agent": "LUKi-API-Gateway/0.2.0",
-                },
+                headers=img_headers,
             )
             response.raise_for_status()
             return response.json()
@@ -218,15 +228,20 @@ class AgentClient:
                 "client_tag": request.client_tag,  # Widget mode detection
             }
             
+            # Build headers with internal API secret for service-to-service auth
+            stream_headers = {
+                "Content-Type": "application/json",
+                "Accept": "text/event-stream",
+                "User-Agent": "LUKi-API-Gateway/0.2.0"
+            }
+            if settings.INTERNAL_API_SECRET:
+                stream_headers["X-Internal-Secret"] = settings.INTERNAL_API_SECRET
+
             async with self.client.stream(
                 "POST",
                 f"{self.base_url}/v1/chat/stream",
                 json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "text/event-stream",
-                    "User-Agent": "LUKi-API-Gateway/0.2.0"
-                }
+                headers=stream_headers
             ) as response:
                 response.raise_for_status()
                 

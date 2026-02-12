@@ -721,6 +721,37 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
     - **HTTPException 429**: If rate limit is exceeded
     - **HTTPException 500**: If the agent service encounters an error
     """
+    # ── Security: enforce user_id matches authenticated identity ──
+    auth_type = getattr(request.state, "auth_type", "anonymous")
+    auth_user_id = getattr(request.state, "user_id", None)
+
+    if auth_type == "supabase_jwt" and auth_user_id:
+        # Authenticated user: they can only chat as themselves
+        if chat_request.user_id and chat_request.user_id != auth_user_id:
+            logger.warning(
+                f"User ID mismatch: JWT sub={auth_user_id}, "
+                f"request user_id={chat_request.user_id}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="user_id does not match authenticated identity",
+            )
+        # Ensure user_id is set from JWT if not provided
+        if not chat_request.user_id:
+            chat_request.user_id = auth_user_id
+    elif auth_type == "anonymous" or not auth_user_id:
+        # Unauthenticated caller: force anonymous user_id
+        # This prevents attackers from supplying a real user_id via curl
+        if chat_request.user_id and not (
+            chat_request.user_id.startswith("anonymous_")
+            or chat_request.user_id == "anonymous_base_user"
+        ):
+            logger.warning(
+                f"Unauthenticated request tried to use user_id={chat_request.user_id}, "
+                f"forcing anonymous"
+            )
+            chat_request.user_id = "anonymous_base_user"
+
     logger.info(f"Chat request received for user: {chat_request.user_id}")
     
     try:
@@ -935,8 +966,8 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
             conversation_id=conversation_id
         )
         
-        # Record the message for daily rate limiting
-        await record_daily_message(chat_request.user_id)
+        # Record the message for daily rate limiting (fire-and-forget, don't block response)
+        asyncio.create_task(record_daily_message(chat_request.user_id))
         
         # Return the conversation_id as session_id for frontend to use
         # This ensures conversation continuity

@@ -108,6 +108,18 @@ async def startup_event():
     logger.info(f"Memory service URL: {settings.MEMORY_SERVICE_URL}")
     logger.info(f"Cognitive service URL: {settings.COGNITIVE_SERVICE_URL}")
     logger.info(f"Wallet service configured: Helius={bool(wallet_client.helius_url)}, Genesis={bool(wallet_client.genesis_collection)}")
+    logger.info(f"Internal API secret configured: {bool(settings.INTERNAL_API_SECRET)}")
+
+    import os
+    if not os.getenv("SUPABASE_JWT_SECRET"):
+        logger.warning("⚠️  SUPABASE_JWT_SECRET not set — JWT signature verification DISABLED. Set this in Railway env vars!")
+    else:
+        logger.info("JWT signature verification: enabled")
+
+    # Pre-check Redis at startup so the first request doesn't pay the timeout penalty
+    from luki_api.middleware.rate_limit import get_redis
+    redis_conn = await get_redis()
+    logger.info(f"Redis available: {redis_conn is not None}")
 
 @app.on_event("shutdown")
 async def shutdown_event():

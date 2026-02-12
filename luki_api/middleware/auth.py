@@ -46,7 +46,8 @@ async def auth_middleware(request: Request, call_next: Callable):
     
     # Skip auth for health checks, root path, test endpoints, and anonymous chat
     skip_paths = ["/health", "/health/", "/", "/docs", "/openapi.json", "/redoc"]
-    skip_prefixes = ["/api/chat", "/test", "/api/conversation/history", "/api/conversations", "/api/reme/photo-reminiscence-images", "/api/cognitive", "/api/wallet", "/api/uploads"]  # Allow iframe to load conversations, cognitive activities, wallet verification, and internal upload searches
+    # These prefixes allow anonymous fallback but still attempt JWT extraction
+    soft_auth_prefixes = ["/api/chat", "/test", "/api/conversation/history", "/api/conversations", "/api/reme/photo-reminiscence-images", "/api/cognitive", "/api/wallet", "/api/uploads"]
     
     # Debug logging for conversations endpoint
     if "/api/conversations" in request.url.path and "/messages/" in request.url.path:
@@ -54,8 +55,41 @@ async def auth_middleware(request: Request, call_next: Callable):
         logger.info(f" Path: {request.url.path}")
         logger.info(f" Method: {request.method}")
     
-    # Allow anonymous access but set user context
-    if any(request.url.path.startswith(prefix) for prefix in skip_prefixes):
+    is_soft_auth = any(request.url.path.startswith(prefix) for prefix in soft_auth_prefixes)
+    
+    if is_soft_auth:
+        # Try to extract JWT if present, but allow anonymous fallback
+        try:
+            credentials: Optional[HTTPAuthorizationCredentials] = await security(request)
+            if credentials:
+                try:
+                    token = credentials.credentials
+                    decoded = jwt.decode(
+                        token,
+                        key=SUPABASE_JWT_SECRET or "",
+                        algorithms=["HS256", "HS384", "HS512"],
+                        options={
+                            "verify_signature": bool(SUPABASE_JWT_SECRET),
+                            "verify_aud": False,
+                            "verify_iss": False,
+                            "verify_exp": True,
+                        }
+                    )
+                    user_id = decoded.get('sub')
+                    if user_id:
+                        request.state.auth_type = "supabase_jwt"
+                        request.state.auth_token = token
+                        request.state.user_id = user_id
+                        logger.info(f"Authenticated user {user_id} on soft-auth path: {request.url.path}")
+                        response = await call_next(request)
+                        return response
+                except (JWTError, ValueError) as e:
+                    logger.debug(f"JWT verification failed on soft-auth path: {e}")
+                    pass  # Fall through to anonymous
+        except Exception:
+            pass  # Fall through to anonymous
+        
+        # No valid JWT found — allow anonymous access
         request.state.auth_type = "anonymous"
         request.state.user_id = "anonymous_base_user"
         response = await call_next(request)
@@ -105,16 +139,16 @@ async def auth_middleware(request: Request, call_next: Callable):
                 # since Supabase tokens are already validated by the client
                 # In production, you'd verify with the Supabase JWT secret
                 try:
-                    # Decode without ANY verification - skip signature, audience, etc.
-                    # Supabase already validated the token on the client side
+                    # Verify JWT signature with Supabase JWT secret
                     decoded = jwt.decode(
                         token, 
-                        key="",  # No key needed when not verifying
+                        key=SUPABASE_JWT_SECRET or "",
+                        algorithms=["HS256", "HS384", "HS512"],
                         options={
-                            "verify_signature": False,
-                            "verify_aud": False,  # Skip audience verification
-                            "verify_iss": False,  # Skip issuer verification
-                            "verify_exp": False,  # Skip expiration (risky but needed for debugging)
+                            "verify_signature": bool(SUPABASE_JWT_SECRET),
+                            "verify_aud": False,
+                            "verify_iss": False,
+                            "verify_exp": True,
                         }
                     )
                     user_id = decoded.get('sub')  # Supabase user ID

@@ -1,5 +1,6 @@
 from fastapi import Request, HTTPException
 from luki_api.config import settings
+import asyncio
 import logging
 import time
 import redis.asyncio as redis
@@ -10,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 # Redis client for rate limiting
 redis_client: Optional[redis.Redis] = None
+_redis_failed: bool = False  # Once True, skip all Redis attempts until restart
 
 # Tier-based daily AI message limits (24 hour window)
 ACCOUNT_TIER_MESSAGE_LIMITS: Dict[str, int] = {
@@ -24,17 +26,24 @@ _daily_message_state: Dict[str, Any] = {}
 
 async def get_redis():
     """Get or create Redis client"""
-    global redis_client
+    global redis_client, _redis_failed
+    if _redis_failed:
+        return None
     if redis_client is None and settings.REDIS_URL:
         try:
             logger.info(f"Connecting to Redis at {settings.REDIS_URL}")
-            redis_client = redis.from_url(settings.REDIS_URL)
-            # Test connection
-            await redis_client.ping()
+            redis_client = redis.from_url(
+                settings.REDIS_URL,
+                socket_connect_timeout=3,
+                socket_timeout=3,
+            )
+            # Test connection with hard timeout
+            await asyncio.wait_for(redis_client.ping(), timeout=3.0)
             logger.info("Redis connection successful")
         except Exception as e:
-            logger.error(f"Failed to connect to Redis: {str(e)}")
+            logger.error(f"Failed to connect to Redis: {str(e)}. Using in-memory fallback.")
             redis_client = None
+            _redis_failed = True
     return redis_client
 
 async def rate_limit_middleware(request: Request, call_next):
@@ -107,8 +116,9 @@ async def rate_limit_middleware(request: Request, call_next):
                 
         except redis.RedisError as e:
             logger.error(f"Redis error in rate limiting: {str(e)}")
-            # Fall back to allowing the request on Redis errors
-            pass
+            # Mark Redis as failed so no further attempts are made
+            _redis_failed = True
+            redis_client = None
     else:
         # Fallback to in-memory rate limiting when Redis is unavailable
         # This is less scalable but provides a backup mechanism
