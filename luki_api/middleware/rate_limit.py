@@ -109,9 +109,13 @@ async def rate_limit_middleware(request: Request, call_next):
             # Check if rate limit exceeded
             if count > rate_limit:
                 logger.warning(f"Rate limit exceeded for client: {client_id}")
+                # Calculate seconds until the oldest request in the window
+                # expires, giving the client a standard Retry-After hint.
+                retry_after = int(time_window - (current_time - current_time) + 1)
                 raise HTTPException(
                     status_code=429,
-                    detail="Rate limit exceeded. Please try again later."
+                    detail="Rate limit exceeded. Please try again later.",
+                    headers={"Retry-After": str(max(1, retry_after))},
                 )
                 
         except redis.RedisError as e:
@@ -155,9 +159,13 @@ async def in_memory_rate_limit(client_id: str, current_time: float, is_authentic
     rate_limit = 10000 if is_authenticated else settings.RATE_LIMIT_REQUESTS_PER_MINUTE
     if len(client_data["requests"]) >= rate_limit:
         logger.warning(f"Rate limit exceeded for client: {client_id}")
+        # Earliest request time determines when capacity frees up
+        earliest = min(client_data["requests"]) if client_data["requests"] else current_time
+        retry_after = max(1, int(time_window - (current_time - earliest) + 1))
         raise HTTPException(
             status_code=429,
-            detail="Rate limit exceeded. Please try again later."
+            detail="Rate limit exceeded. Please try again later.",
+            headers={"Retry-After": str(retry_after)},
         )
         
     # Add current request to store
