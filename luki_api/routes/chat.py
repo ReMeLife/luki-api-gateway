@@ -20,6 +20,7 @@ from luki_api.clients.agent_client import (
 from luki_api.clients.memory_service import MemoryServiceClient, ELRQueryRequest
 from luki_api.clients.security_service import enforce_policy_scopes
 from luki_api.routes.memories import _invalidate_user_memories_cache
+from luki_api.middleware.rate_limit import check_daily_message_limit, record_daily_message
 from datetime import datetime
 
 router = APIRouter()
@@ -614,6 +615,14 @@ class ChatRequest(BaseModel):
         default=None,
         description="Optional world day context with name, description, fun_fact, and emoji for today's special day"
     )
+    account_tier: Optional[str] = Field(
+        default="free",
+        description="User's subscription tier (free, plus, pro) - determines daily message limits"
+    )
+    file_search_mode: Optional[bool] = Field(
+        default=False,
+        description="When true, triggers explicit file/upload search instead of normal chat"
+    )
     
     class Config:
         schema_extra = {
@@ -676,6 +685,10 @@ class PhotoReminiscenceImageRequest(BaseModel):
         default=1,
         description="Number of images to generate (default 1, max 4)",
     )
+    account_tier: Optional[str] = Field(
+        default="free",
+        description="User's subscription tier (free, plus, pro) - determines image generation limits",
+    )
 
 @router.post("/chat", 
          response_model=ChatResponse,
@@ -708,6 +721,37 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
     - **HTTPException 429**: If rate limit is exceeded
     - **HTTPException 500**: If the agent service encounters an error
     """
+    # ── Security: enforce user_id matches authenticated identity ──
+    auth_type = getattr(request.state, "auth_type", "anonymous")
+    auth_user_id = getattr(request.state, "user_id", None)
+
+    if auth_type == "supabase_jwt" and auth_user_id:
+        # Authenticated user: they can only chat as themselves
+        if chat_request.user_id and chat_request.user_id != auth_user_id:
+            logger.warning(
+                f"User ID mismatch: JWT sub={auth_user_id}, "
+                f"request user_id={chat_request.user_id}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="user_id does not match authenticated identity",
+            )
+        # Ensure user_id is set from JWT if not provided
+        if not chat_request.user_id:
+            chat_request.user_id = auth_user_id
+    elif auth_type == "anonymous" or not auth_user_id:
+        # Unauthenticated caller: force anonymous user_id
+        # This prevents attackers from supplying a real user_id via curl
+        if chat_request.user_id and not (
+            chat_request.user_id.startswith("anonymous_")
+            or chat_request.user_id == "anonymous_base_user"
+        ):
+            logger.warning(
+                f"Unauthenticated request tried to use user_id={chat_request.user_id}, "
+                f"forcing anonymous"
+            )
+            chat_request.user_id = "anonymous_base_user"
+
     logger.info(f"Chat request received for user: {chat_request.user_id}")
     
     try:
@@ -726,9 +770,18 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
                 detail="Latest message must be from user"
             )
         
-        # Determine anonymity across all cases
+        # Check daily message limit based on account tier
+        account_tier = (chat_request.account_tier or "free").lower()
+        rate_limit_error = await check_daily_message_limit(chat_request.user_id, account_tier)
+        if rate_limit_error:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=rate_limit_error
+            )
+        
+        # Determine anonymity across all cases (skip memory for widget modes)
         def is_anonymous(uid: Optional[str], client_tag: Optional[str]) -> bool:
-            return (not uid) or uid == 'anonymous_base_user' or uid.startswith('anonymous_') or (client_tag == 'luki_taster_widget')
+            return (not uid) or uid == 'anonymous_base_user' or uid.startswith('anonymous_') or (client_tag == 'luki_taster_widget') or (client_tag == 'remelife_widget')
         # Retrieve memory context from memory service
         memory_context = []
         tasks = []
@@ -826,6 +879,8 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
             user_id=chat_request.user_id,
             session_id=chat_request.session_id,
             context=agent_context,
+            file_search_mode=chat_request.file_search_mode or False,
+            client_tag=chat_request.client_tag,  # Forward widget mode detection
         )
 
         # Call the core agent with timing for debugging
@@ -911,6 +966,9 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
             conversation_id=conversation_id
         )
         
+        # Record the message for daily rate limiting (fire-and-forget, don't block response)
+        asyncio.create_task(record_daily_message(chat_request.user_id))
+        
         # Return the conversation_id as session_id for frontend to use
         # This ensures conversation continuity
         return ChatResponse(
@@ -975,6 +1033,7 @@ async def photo_reminiscence_images_endpoint(
             activity_title=image_request.activity_title,
             answers=image_request.answers,
             n=image_request.n or 1,
+            account_tier=image_request.account_tier or "free",
         )
         result = await agent_client.photo_reminiscence_images(agent_request)
         return result
@@ -1064,7 +1123,7 @@ async def chat_stream_endpoint(chat_request: ChatRequest, request: Request):
             
             # Retrieve memory context from memory service for streaming - only if authenticated
             def is_anonymous(uid: Optional[str], client_tag: Optional[str]) -> bool:
-                return (not uid) or uid == 'anonymous_base_user' or uid.startswith('anonymous_') or (client_tag == 'luki_taster_widget')
+                return (not uid) or uid == 'anonymous_base_user' or uid.startswith('anonymous_') or (client_tag == 'luki_taster_widget') or (client_tag == 'remelife_widget')
 
             memory_context = []
             tasks = []
@@ -1137,6 +1196,8 @@ async def chat_stream_endpoint(chat_request: ChatRequest, request: Request):
                 user_id=chat_request.user_id,
                 session_id=chat_request.session_id,
                 context=agent_context,
+                file_search_mode=chat_request.file_search_mode or False,
+                client_tag=chat_request.client_tag,  # Forward widget mode detection
             )
             
             # Stream response directly from agent; sanitization is handled by the core agent.

@@ -1,29 +1,49 @@
 from fastapi import Request, HTTPException
 from luki_api.config import settings
+import asyncio
 import logging
 import time
 import redis.asyncio as redis
 import json
-from typing import Optional
+from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
 # Redis client for rate limiting
 redis_client: Optional[redis.Redis] = None
+_redis_failed: bool = False  # Once True, skip all Redis attempts until restart
+
+# Tier-based daily AI message limits (24 hour window)
+ACCOUNT_TIER_MESSAGE_LIMITS: Dict[str, int] = {
+    "free": 50,      # 50 messages per day
+    "plus": 2000,    # 2000 messages per day
+    "pro": 10000,    # 10000 messages per day (stated as "unlimited")
+}
+DAILY_MESSAGE_WINDOW_SECONDS = 86400  # 24 hours
+
+# In-memory fallback for daily message tracking
+_daily_message_state: Dict[str, Any] = {}
 
 async def get_redis():
     """Get or create Redis client"""
-    global redis_client
+    global redis_client, _redis_failed
+    if _redis_failed:
+        return None
     if redis_client is None and settings.REDIS_URL:
         try:
             logger.info(f"Connecting to Redis at {settings.REDIS_URL}")
-            redis_client = redis.from_url(settings.REDIS_URL)
-            # Test connection
-            await redis_client.ping()
+            redis_client = redis.from_url(
+                settings.REDIS_URL,
+                socket_connect_timeout=3,
+                socket_timeout=3,
+            )
+            # Test connection with hard timeout
+            await asyncio.wait_for(redis_client.ping(), timeout=3.0)
             logger.info("Redis connection successful")
         except Exception as e:
-            logger.error(f"Failed to connect to Redis: {str(e)}")
+            logger.error(f"Failed to connect to Redis: {str(e)}. Using in-memory fallback.")
             redis_client = None
+            _redis_failed = True
     return redis_client
 
 async def rate_limit_middleware(request: Request, call_next):
@@ -89,15 +109,20 @@ async def rate_limit_middleware(request: Request, call_next):
             # Check if rate limit exceeded
             if count > rate_limit:
                 logger.warning(f"Rate limit exceeded for client: {client_id}")
+                # Calculate seconds until the oldest request in the window
+                # expires, giving the client a standard Retry-After hint.
+                retry_after = int(time_window - (current_time - current_time) + 1)
                 raise HTTPException(
                     status_code=429,
-                    detail="Rate limit exceeded. Please try again later."
+                    detail="Rate limit exceeded. Please try again later.",
+                    headers={"Retry-After": str(max(1, retry_after))},
                 )
                 
         except redis.RedisError as e:
             logger.error(f"Redis error in rate limiting: {str(e)}")
-            # Fall back to allowing the request on Redis errors
-            pass
+            # Mark Redis as failed so no further attempts are made
+            _redis_failed = True
+            redis_client = None
     else:
         # Fallback to in-memory rate limiting when Redis is unavailable
         # This is less scalable but provides a backup mechanism
@@ -134,10 +159,222 @@ async def in_memory_rate_limit(client_id: str, current_time: float, is_authentic
     rate_limit = 10000 if is_authenticated else settings.RATE_LIMIT_REQUESTS_PER_MINUTE
     if len(client_data["requests"]) >= rate_limit:
         logger.warning(f"Rate limit exceeded for client: {client_id}")
+        # Earliest request time determines when capacity frees up
+        earliest = min(client_data["requests"]) if client_data["requests"] else current_time
+        retry_after = max(1, int(time_window - (current_time - earliest) + 1))
         raise HTTPException(
             status_code=429,
-            detail="Rate limit exceeded. Please try again later."
+            detail="Rate limit exceeded. Please try again later.",
+            headers={"Retry-After": str(retry_after)},
         )
         
     # Add current request to store
     client_data["requests"].append(current_time)
+
+
+async def check_daily_message_limit(
+    user_id: str, account_tier: str = "free"
+) -> Optional[Dict[str, Any]]:
+    """Check if user has exceeded their daily AI message limit based on tier.
+    
+    Args:
+        user_id: The user's ID
+        account_tier: User's subscription tier (free, plus, pro)
+    
+    Returns:
+        None if within limits, or a rate_limited dict if exceeded
+    """
+    if not user_id or user_id.startswith("anonymous"):
+        # Anonymous users get free tier limits
+        account_tier = "free"
+    
+    # Get tier-based limit (default to free if unknown tier)
+    tier = account_tier.lower() if account_tier else "free"
+    user_limit = ACCOUNT_TIER_MESSAGE_LIMITS.get(tier, ACCOUNT_TIER_MESSAGE_LIMITS["free"])
+    
+    redis_conn = await get_redis()
+    current_time = time.time()
+    
+    if redis_conn:
+        try:
+            key = f"daily_messages:{user_id}"
+            
+            # Get current count and window start from Redis
+            data = await redis_conn.hgetall(key)  # type: ignore[misc]
+            
+            if data:
+                window_start = float(data.get(b"window_start", 0))
+                count = int(data.get(b"count", 0))
+                
+                # Reset if window expired
+                if current_time - window_start >= DAILY_MESSAGE_WINDOW_SECONDS:
+                    count = 0
+                    window_start = current_time
+                    await redis_conn.hset(key, mapping={"window_start": current_time, "count": 0})  # type: ignore[misc]
+                    await redis_conn.expire(key, DAILY_MESSAGE_WINDOW_SECONDS * 2)
+            else:
+                count = 0
+                window_start = current_time
+            
+            if count >= user_limit:
+                tier_display = tier.capitalize() if tier != "free" else "Free"
+                remaining_seconds = DAILY_MESSAGE_WINDOW_SECONDS - (current_time - window_start)
+                remaining_hours = max(1, int(remaining_seconds / 3600))
+                return {
+                    "status": "rate_limited",
+                    "scope": "daily_messages",
+                    "message": f"You've reached your {tier_display} plan limit of {user_limit} messages per day. Please try again in ~{remaining_hours} hours or upgrade your plan.",
+                    "limit": user_limit,
+                    "used": count,
+                    "tier": tier,
+                    "reset_in_hours": remaining_hours,
+                }
+            
+            return None
+            
+        except redis.RedisError as e:
+            logger.error(f"Redis error checking daily message limit: {e}")
+            # Fall through to in-memory fallback
+    
+    # In-memory fallback
+    state = _daily_message_state
+    user_entry = state.get(user_id)
+    
+    if user_entry:
+        window_start = user_entry.get("window_start", 0)
+        count = user_entry.get("count", 0)
+        
+        # Reset if window expired
+        if current_time - window_start >= DAILY_MESSAGE_WINDOW_SECONDS:
+            user_entry["window_start"] = current_time
+            user_entry["count"] = 0
+            count = 0
+            window_start = current_time
+    else:
+        count = 0
+        window_start = current_time
+    
+    if count >= user_limit:
+        tier_display = tier.capitalize() if tier != "free" else "Free"
+        remaining_seconds = DAILY_MESSAGE_WINDOW_SECONDS - (current_time - window_start)
+        remaining_hours = max(1, int(remaining_seconds / 3600))
+        return {
+            "status": "rate_limited",
+            "scope": "daily_messages",
+            "message": f"You've reached your {tier_display} plan limit of {user_limit} messages per day. Please try again in ~{remaining_hours} hours or upgrade your plan.",
+            "limit": user_limit,
+            "used": count,
+            "tier": tier,
+            "reset_in_hours": remaining_hours,
+        }
+    
+    return None
+
+
+async def record_daily_message(user_id: str) -> None:
+    """Record a successful AI message for daily rate limiting tracking.
+    
+    Args:
+        user_id: The user's ID
+    """
+    if not user_id:
+        return
+    
+    redis_conn = await get_redis()
+    current_time = time.time()
+    
+    if redis_conn:
+        try:
+            key = f"daily_messages:{user_id}"
+            
+            # Get current data
+            data = await redis_conn.hgetall(key)  # type: ignore[misc]
+            
+            if data:
+                window_start = float(data.get(b"window_start", 0))
+                count = int(data.get(b"count", 0))
+                
+                # Reset if window expired
+                if current_time - window_start >= DAILY_MESSAGE_WINDOW_SECONDS:
+                    await redis_conn.hset(key, mapping={"window_start": current_time, "count": 1})  # type: ignore[misc]
+                else:
+                    await redis_conn.hincrby(key, "count", 1)  # type: ignore[misc]
+            else:
+                await redis_conn.hset(key, mapping={"window_start": current_time, "count": 1})  # type: ignore[misc]
+            
+            await redis_conn.expire(key, DAILY_MESSAGE_WINDOW_SECONDS * 2)
+            return
+            
+        except redis.RedisError as e:
+            logger.error(f"Redis error recording daily message: {e}")
+            # Fall through to in-memory fallback
+    
+    # In-memory fallback
+    state = _daily_message_state
+    user_entry = state.get(user_id)
+    
+    if user_entry:
+        window_start = user_entry.get("window_start", 0)
+        
+        # Reset if window expired
+        if current_time - window_start >= DAILY_MESSAGE_WINDOW_SECONDS:
+            state[user_id] = {"window_start": current_time, "count": 1}
+        else:
+            user_entry["count"] = user_entry.get("count", 0) + 1
+    else:
+        state[user_id] = {"window_start": current_time, "count": 1}
+
+
+async def get_daily_message_usage(user_id: str, account_tier: str = "free") -> Dict[str, Any]:
+    """Get current daily message usage for a user.
+    
+    Args:
+        user_id: The user's ID
+        account_tier: User's subscription tier (free, plus, pro)
+    
+    Returns:
+        Dict with usage info: used, limit, tier, reset_in_hours
+    """
+    tier = (account_tier or "free").lower()
+    user_limit = ACCOUNT_TIER_MESSAGE_LIMITS.get(tier, ACCOUNT_TIER_MESSAGE_LIMITS["free"])
+    
+    redis_conn = await get_redis()
+    current_time = time.time()
+    count = 0
+    window_start = current_time
+    
+    if redis_conn:
+        try:
+            key = f"daily_messages:{user_id}"
+            data = await redis_conn.hgetall(key)  # type: ignore[misc]
+            
+            if data:
+                window_start = float(data.get(b"window_start", current_time))
+                count = int(data.get(b"count", 0))
+                
+                # Reset count if window expired
+                if current_time - window_start >= DAILY_MESSAGE_WINDOW_SECONDS:
+                    count = 0
+                    window_start = current_time
+        except redis.RedisError as e:
+            logger.error(f"Redis error getting daily message usage: {e}")
+    else:
+        # In-memory fallback
+        state = _daily_message_state
+        user_entry = state.get(user_id)
+        if user_entry:
+            window_start = user_entry.get("window_start", current_time)
+            count = user_entry.get("count", 0)
+            if current_time - window_start >= DAILY_MESSAGE_WINDOW_SECONDS:
+                count = 0
+    
+    remaining_seconds = max(0, DAILY_MESSAGE_WINDOW_SECONDS - (current_time - window_start))
+    remaining_hours = max(0, int(remaining_seconds / 3600))
+    
+    return {
+        "used": count,
+        "limit": user_limit,
+        "tier": tier,
+        "reset_in_hours": remaining_hours,
+        "remaining": max(0, user_limit - count),
+    }

@@ -191,11 +191,19 @@ pytest -q
 ---
 
 ## 11. Roadmap  
-- GraphQL gateway (optional)  
-- gRPC passthrough for high-throughput clients  
-- Webhook callback support (push instead of poll)  
-- Canary releases & blue/green deploy helpers  
-- Advanced quota system with billing hooks
+**Note:** Many core features are already implemented:
+- ✅ **SSE streaming** - Implemented (`/v1/chat/stream`)
+- ✅ **Redis-backed rate limiting** - Implemented with tier-based daily limits
+- ✅ **Caching middleware** - Implemented (in-memory with Redis option)
+- ✅ **Metrics endpoints** - Implemented (`/metrics`)
+- ✅ **Health monitoring** - Implemented (`/health`)
+- ✅ **Wallet verification** - Implemented (Solana + Helius)
+- **GraphQL gateway** (optional)  
+- **gRPC passthrough** for high-throughput clients  
+- **Webhook callback support** (push instead of poll)  
+- **Canary releases & blue/green deploy helpers**  
+- **Advanced quota system** with billing hooks
+- **Message queue** for surge handling (Phase F)
 
 ---
 

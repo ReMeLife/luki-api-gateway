@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     AGENT_SERVICE_URL: str = os.getenv("LUKI_CORE_AGENT_URL", "http://localhost:9000")
     AGENT_SERVICE_TIMEOUT: int = 240  # Extended timeout to align with core-agent structured output
     
+    # Internal API secret — set after instantiation to bypass LUKI_API_ env_prefix
+    INTERNAL_API_SECRET: str = ""
+    
     # Cognitive module settings - Railway deployment URLs
     COGNITIVE_SERVICE_URL: str = os.getenv("LUKI_COGNITIVE_SERVICE_URL", "http://localhost:8101")
     COGNITIVE_SERVICE_TIMEOUT: int = 60
@@ -69,3 +72,8 @@ class Settings(BaseSettings):
         env_prefix = "LUKI_API_"
 
 settings = Settings()
+
+# Override INTERNAL_API_SECRET after instantiation to bypass the LUKI_API_ env_prefix.
+# pydantic-settings would look for LUKI_API_INTERNAL_API_SECRET, but the env var is
+# LUKI_INTERNAL_API_SECRET (shared with the core agent which doesn't use pydantic-settings).
+settings.INTERNAL_API_SECRET = os.getenv("LUKI_INTERNAL_API_SECRET", "")

@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from luki_api.routes import chat, elr, health, metrics, conversation, memories, conversations, cognitive, wallet
+from luki_api.routes import chat, elr, health, metrics, conversation, memories, conversations, cognitive, wallet, uploads
 from luki_api.middleware import auth, rate_limit, logging, metrics as metrics_middleware
 from luki_api.config import settings
 from luki_api.clients.agent_client import agent_client
@@ -72,12 +72,18 @@ async def custom_cors_middleware(request: Request, call_next):
     
     return response
 
+# Import correlation middleware
+from luki_api.middleware import correlation
+
 # Order matters! Register in reverse order (last registered = runs first)
-# Register other middleware first (they'll run after CORS)
+# Register other middleware first (they'll run after CORS and correlation)
 app.middleware("http")(rate_limit.rate_limit_middleware)
 app.middleware("http")(auth.auth_middleware)
 app.middleware("http")(metrics_middleware.metrics_middleware)
 app.middleware("http")(logging.request_logging_middleware)
+
+# Register correlation middleware before CORS (runs after CORS)
+app.middleware("http")(correlation.correlation_middleware)
 
 # Register CORS middleware LAST so it runs FIRST
 app.middleware("http")(custom_cors_middleware)
@@ -92,6 +98,7 @@ app.include_router(elr.router, prefix="/v1/elr", tags=["elr"])
 app.include_router(metrics.router, prefix="/metrics", tags=["metrics"])
 app.include_router(cognitive.router, prefix="", tags=["cognitive"])  # Life Story and cognitive module routes
 app.include_router(wallet.router, prefix="/api", tags=["wallet"])  # Wallet verification and NFT entitlements
+app.include_router(uploads.router, prefix="", tags=["uploads"])  # User uploads search and retrieval
 
 @app.on_event("startup")
 async def startup_event():
@@ -101,6 +108,18 @@ async def startup_event():
     logger.info(f"Memory service URL: {settings.MEMORY_SERVICE_URL}")
     logger.info(f"Cognitive service URL: {settings.COGNITIVE_SERVICE_URL}")
     logger.info(f"Wallet service configured: Helius={bool(wallet_client.helius_url)}, Genesis={bool(wallet_client.genesis_collection)}")
+    logger.info(f"Internal API secret configured: {bool(settings.INTERNAL_API_SECRET)}")
+
+    import os
+    if not os.getenv("SUPABASE_JWT_SECRET"):
+        logger.warning("⚠️  SUPABASE_JWT_SECRET not set — JWT signature verification DISABLED. Set this in Railway env vars!")
+    else:
+        logger.info("JWT signature verification: enabled")
+
+    # Pre-check Redis at startup so the first request doesn't pay the timeout penalty
+    from luki_api.middleware.rate_limit import get_redis
+    redis_conn = await get_redis()
+    logger.info(f"Redis available: {redis_conn is not None}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
