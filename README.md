@@ -1,243 +1,100 @@
-# luki-api-gateway  
-*Unified HTTP interface for the LUKi agent & modules (auth, routing, rate limits)*
+# luki-api-gateway
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+> **This repository is archived.** Active development continues in a private repository. This public version reflects the architecture from the ReMeLife integration era and is no longer maintained or deployed.
 
----
+Single entry point for clients to access LUKi AI services: chat, memory, cognitive modules, and reporting.
 
-## 1. Overview  
-`luki-api-gateway` is the **single entry point** for clients (SDKs, web apps, partner services) to access all LUKi capabilities:
+## What It Does
 
-- **Chat / Agent endpoints** (`/v1/chat`, streaming)  
-- **Memory & ELR ops proxy** (`/v1/elr/...`)  
-- **Module endpoints pass-through** (cognitive, engagement, reporting)  
-- **AuthN/AuthZ, rate limiting, request logging & tracing**  
-- **Versioning, schema validation, error normalization**
+- Routes requests to downstream microservices (core agent, memory, cognitive, engagement, reporting)
+- Authenticates via JWT and API keys
+- Rate-limits per user with Redis (in-memory fallback)
+- Streams chat responses via SSE
+- Proxies ELR memory operations and module endpoints
+- Adds correlation IDs to all requests for tracing
 
-It hides internal topology, giving external consumers a stable, documented REST surface.
+## Stack
 
----
+- **Framework:** FastAPI + Uvicorn
+- **Auth:** python-jose (JWT), custom middleware
+- **Rate Limiting:** Custom Redis-based limiter with in-memory fallback
+- **HTTP Clients:** httpx (async) to downstream services
+- **Deployment:** Docker on Railway
 
-## 2. Core Responsibilities  
-- **Routing & Aggregation:** Fan-out to underlying services (memory, modules, token service)  
-- **Authentication:** API keys, OAuth/JWT, service-to-service tokens  
-- **Authorization:** Enforce scopes/roles (integration with `luki-security-privacy`)  
-- **Throttling & Quotas:** Per-user and per-key rate limits  
-- **Observability:** Structured logs, metrics, traces, correlation IDs  
-- **Schema & Version Control:** Pydantic models and OpenAPI spec management
+## Structure
 
----
+```
+luki_api/
+├── main.py                  # FastAPI app, middleware registration
+├── config.py                # Env vars, service URLs, rate limit settings
+├── middleware/
+│   ├── auth.py              # JWT + API key authentication
+│   ├── rate_limit.py        # Redis + in-memory rate limiting
+│   ├── metrics.py           # Prometheus metrics collection
+│   ├── cache.py             # Response cache layer
+│   ├── circuit_breaker.py   # Circuit breaker for downstream calls
+│   ├── correlation.py       # Request correlation IDs
+│   └── logging.py           # Structured request logging
+├── routes/
+│   ├── chat.py              # POST /api/chat/{user_id}/stream (SSE)
+│   ├── conversation.py      # Conversation management
+│   ├── conversations.py     # Conversation listing
+│   ├── elr.py               # ELR memory proxy
+│   ├── memories.py          # Memory operations
+│   ├── uploads.py           # File upload handling
+│   ├── health.py            # GET /health
+│   ├── metrics.py           # GET /metrics
+│   ├── cognitive.py         # Cognitive module proxy
+│   └── wallet.py            # Wallet verification proxy
+├── clients/
+│   ├── agent_client.py      # Core agent HTTP client (SSE streaming)
+│   ├── memory_service.py    # Memory service HTTP client
+│   ├── base_client.py       # Shared HTTP client base
+│   ├── security_service.py  # Security service HTTP client
+│   └── wallet_client.py     # Solana wallet verification client
+└── monitoring/
+    └── health_monitor.py    # Downstream service health tracking
+```
 
-## 3. Tech Stack  
-- **Framework:** FastAPI (ASGI), Uvicorn/Gunicorn  
-- **Auth:** PyJWT, custom middleware, RBAC from security module  
-- **Rate Limit:** `slowapi` or custom Redis-based limiter  
-- **Schema / Docs:** Pydantic v2, OpenAPI auto-docs, Redoc UI  
-- **HTTP Clients:** `httpx` async clients to downstream services  
-- **Tracing:** OpenTelemetry exporters (Jaeger/Tempo), structlog for logs  
-- **Deployment:** Docker/K8s, behind NGINX/API Gateway (cloud)
+## Prerequisites
 
----
+This gateway proxies requests to other LUKi microservices. You need running instances of:
 
-## 4. Repository Structure  
-~~~text
-luki-api-gateway/
-├── README.md
-├── pyproject.toml
-├── requirements.txt
-├── requirements-railway.txt     # railway deployment dependencies
-├── env.example                  # environment template
-├── .env                         # actual environment file (gitignored)
-├── .railwayignore              # railway deployment exclusions
-├── .dockerignore               # docker build exclusions
-├── Dockerfile                  # container build configuration
-├── railway.toml                # railway deployment configuration
-├── Procfile                    # process definitions
-├── luki_api/                   # main package
-│   ├── __init__.py
-│   ├── config.py               # env vars, service URLs, rate limits
-│   ├── main.py                 # FastAPI app entry
-│   ├── auth/
-│   │   ├── __init__.py
-│   │   ├── api_key.py          # API key authentication
-│   │   ├── jwt.py              # JWT token handling
-│   │   └── rbac.py             # role-based access control
-│   ├── middleware/
-│   │   ├── __init__.py
-│   │   ├── auth.py             # authentication middleware
-│   │   ├── logging.py          # structured logging
-│   │   ├── rate_limit.py       # rate limiting
-│   │   └── tracing.py          # request tracing
-│   ├── routes/
-│   │   ├── __init__.py
-│   │   ├── chat.py             # /v1/chat endpoints
-│   │   ├── elr.py              # /v1/elr proxy routes
-│   │   ├── health.py           # /health endpoint
-│   │   └── metrics.py          # /metrics endpoint
-│   └── clients/
-│       ├── __init__.py
-│       ├── agent_client.py     # LUKi core agent client
-│       └── memory_service.py   # memory service client
-└── scripts/                     # deployment and utility scripts
-~~~
+- **luki-core-agent** — AI chat engine (required for `/api/chat`)
+- **luki-memory-service** — ELR memory storage (required for `/api/elr`)
+- **Redis** — rate limiting (optional, falls back to in-memory)
 
----
+## Setup
 
-## 5. Quick Start  
-~~~bash
-git clone git@github.com:REMELife/luki-api-gateway.git
+```bash
+git clone git@github.com:ReMeLife/luki-api-gateway.git
 cd luki-api-gateway
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 uvicorn luki_api.main:app --reload --port 8081
-~~~
+```
 
-Set env vars in `.env` or export:
+Environment variables (set in `.env` or export):
 
-~~~bash
-export AGENT_URL=http://localhost:9000
-export MEMORY_URL=http://localhost:8002
-export COG_URL=http://localhost:8101
-export ENG_URL=http://localhost:8102
-export REP_URL=http://localhost:8103
-export JWT_PUBLIC_KEY_PATH=keys/jwt_pub.pem
-export RATE_LIMIT_PER_MIN=60
-export LOG_LEVEL=INFO
-~~~
+```bash
+export SUPABASE_URL=https://your-project.supabase.co
+export SUPABASE_JWT_SECRET=your-jwt-secret
+export LUKI_CORE_AGENT_URL=http://localhost:9000
+export LUKI_MEMORY_SERVICE_URL=http://localhost:8002
+export LUKI_COGNITIVE_SERVICE_URL=http://localhost:8101
+export REDIS_URL=redis://localhost:6379
+```
 
----
+## Key Endpoints
 
-## 6. Sample Endpoints
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/chat/{user_id}/stream` | SSE streaming chat |
+| POST | `/api/elr/ingest_text` | Ingest text to memory |
+| POST | `/api/elr/search` | Semantic memory search |
+| GET | `/health` | Service health check |
+| GET | `/metrics` | Prometheus metrics |
 
-### Chat (sync)  
-`POST /v1/chat`
+## License
 
-~~~json
-{
-  "user_id": "user_123",
-  "message": "I feel anxious today, can you help?",
-  "context": {"mood": "anxious"}
-}
-~~~
-
-Response:
-~~~json
-{
-  "text": "I’m here for you. Let's try a breathing exercise...",
-  "tool_calls": [],
-  "meta": {"trace_id": "abc-123"}
-}
-~~~
-
-### Chat (stream)  
-`GET /v1/chat/stream?user_id=user_123&message=Tell%20me%20a%20joke`  
-- Server-Sent Events (SSE) or WebSocket (if enabled)
-
-### ELR Ingest Text  
-`POST /v1/elr/ingest_text` → proxies to memory service.
-
-### Activities Recommend  
-`GET /v1/activities/recommend?user_id=user_123&k=3`
-
-### Reports Generate  
-`POST /v1/reports/generate` with `{"user_id":"...", "window_days":7}`
-
-### Health Check  
-`GET /health` - Service health and status
-
-### Metrics  
-`GET /metrics` - Prometheus metrics for monitoring
-
----
-
-## 7. Auth & Rate Limiting  
-- **Modes:** API key (`Authorization: Bearer <key>`), JWT, or internal service tokens.  
-- **Scopes:** `chat:write`, `elr:read`, `elr:write`, etc. checked in `auth/scopes.py`.  
-- **Rate limits:** global + per-user/per-key using Redis backend.
-
----
-
-## 8. Observability  
-- Request/response logs (no PHI) with trace IDs.  
-- `/healthz` for liveness; `/metrics` for Prometheus.  
-- OpenTelemetry tracing to Jaeger/Tempo (configured via ENV).
-
----
-
-## 9. Error Handling  
-- All downstream errors normalized to JSON:
-~~~json
-{
-  "error": {
-    "code": "DOWNSTREAM_TIMEOUT",
-    "message": "Memory service did not respond",
-    "trace_id": "abc-123"
-  }
-}
-~~~
-
----
-
-## 10. Testing & CI  
-- **Unit tests:** routers, schema validation, auth.  
-- **Integration:** spin up mock downstreams via docker-compose.  
-~~~bash
-pytest -q
-~~~
-
-- CI pipeline: lint, test, build Docker, push to registry.
-
----
-
-## 11. Roadmap  
-**Note:** Many core features are already implemented:
-- ✅ **SSE streaming** - Implemented (`/v1/chat/stream`)
-- ✅ **Redis-backed rate limiting** - Implemented with tier-based daily limits
-- ✅ **Caching middleware** - Implemented (in-memory with Redis option)
-- ✅ **Metrics endpoints** - Implemented (`/metrics`)
-- ✅ **Health monitoring** - Implemented (`/health`)
-- ✅ **Wallet verification** - Implemented (Solana + Helius)
-- **GraphQL gateway** (optional)  
-- **gRPC passthrough** for high-throughput clients  
-- **Webhook callback support** (push instead of poll)  
-- **Canary releases & blue/green deploy helpers**  
-- **Advanced quota system** with billing hooks
-- **Message queue** for surge handling (Phase F)
-
----
-
-## 12. Contributing  
-
-We welcome contributions to the LUKi API Gateway! Please follow these guidelines:
-
-### Development Workflow
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/your-feature`
-3. Make your changes and add tests
-4. Run the test suite: `pytest`
-5. Submit a pull request
-
-### Code Standards
-- Follow PEP 8 style guidelines
-- Add type hints for all functions
-- Write tests for new functionality
-- No hard-coded secrets; use environment variables
-- Keep OpenAPI schema updated
-- PR requires review + passing CI
-
----
-
-## 13. License  
-
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
-
-## 14. Support
-
-- **Documentation:** Check the `/docs` endpoint when running the server
-- **Issues:** Report bugs and feature requests via GitHub Issues
-- **Discussions:** Join community discussions for questions and ideas
-
----
-
-**One door in. Everything safe, fast, and consistent out.**
+Apache License 2.0. See [LICENSE](LICENSE).

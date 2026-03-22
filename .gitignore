@@ -215,4 +215,6 @@ __marimo__/
 logs/
 .cache/
 .ipynb_checkpoints/
-luki_api/middleware/business_metrics.py
+.DS_Store
+.idea/
+.vscode/
