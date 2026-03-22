@@ -218,3 +218,6 @@ logs/
 .DS_Store
 .idea/
 .vscode/
+railway.toml
+.railwayignore
+requirements-railway.txt
