@@ -3,8 +3,9 @@
 This module provides authentication middleware for the API Gateway,
 supporting both JWT token and API key authentication methods.
 """
-from fastapi import Request, HTTPException, Depends, status
+from fastapi import Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from starlette.responses import JSONResponse
 from luki_api.config import settings
 from typing import Optional, Callable
 import logging
@@ -44,10 +45,10 @@ async def auth_middleware(request: Request, call_next: Callable):
         logger.info(f"⚡ OPTIONS response headers: {dict(response.headers)}")
         return response
     
-    # Skip auth for health checks, root path, test endpoints, and anonymous chat
+    # Skip auth for health checks, root path, and test endpoints
     skip_paths = ["/health", "/health/", "/", "/docs", "/openapi.json", "/redoc"]
     # These prefixes allow anonymous fallback but still attempt JWT extraction
-    soft_auth_prefixes = ["/api/chat", "/test", "/api/conversation/history", "/api/conversations", "/api/reme/photo-reminiscence-images", "/api/cognitive", "/api/wallet", "/api/uploads"]
+    soft_auth_prefixes = ["/test", "/api/conversation/history", "/api/conversations", "/api/reme/photo-reminiscence-images", "/api/cognitive", "/api/wallet", "/api/uploads"]
     
     # Debug logging for conversations endpoint
     if "/api/conversations" in request.url.path and "/messages/" in request.url.path:
@@ -86,8 +87,8 @@ async def auth_middleware(request: Request, call_next: Callable):
                 except (JWTError, ValueError) as e:
                     logger.debug(f"JWT verification failed on soft-auth path: {e}")
                     pass  # Fall through to anonymous
-        except Exception:
-            pass  # Fall through to anonymous
+        except Exception as e:
+            logger.warning(f"Unexpected error extracting credentials on soft-auth path: {e}")
         
         # No valid JWT found — allow anonymous access
         request.state.auth_type = "anonymous"
@@ -107,9 +108,9 @@ async def auth_middleware(request: Request, call_next: Callable):
             if len(api_key) < 10 or not api_key.replace('-', '').replace('_', '').isalnum():
                 client_host = getattr(request.client, 'host', 'unknown') if request.client else 'unknown'
                 logger.warning(f"Invalid API key format from {client_host}")
-                raise HTTPException(
+                return JSONResponse(
                     status_code=401,
-                    detail="Invalid API key format"
+                    content={"detail": "Invalid API key format"}
                 )
             
             # In a real implementation, you would validate the API key against a database
@@ -119,75 +120,65 @@ async def auth_middleware(request: Request, call_next: Callable):
             request.state.user_id = f"api_key_user_{api_key[:8]}"
             response = await call_next(request)
             return response
-        except HTTPException:
-            raise
         except Exception as e:
             logger.error(f"API key validation error: {e}")
-            raise HTTPException(
+            return JSONResponse(
                 status_code=500,
-                detail="Authentication service error"
+                content={"detail": "Authentication service error"}
             )
     
     # Check for JWT token in Authorization header
-    try:
-        credentials: Optional[HTTPAuthorizationCredentials] = await security(request)
-        if credentials:
-            try:
-                token = credentials.credentials
-                
-                # For Supabase tokens, we can decode without verification
-                # since Supabase tokens are already validated by the client
-                # In production, you'd verify with the Supabase JWT secret
-                try:
-                    # Verify JWT signature with Supabase JWT secret
-                    decoded = jwt.decode(
-                        token, 
-                        key=SUPABASE_JWT_SECRET or "",
-                        algorithms=["HS256", "HS384", "HS512"],
-                        options={
-                            "verify_signature": bool(SUPABASE_JWT_SECRET),
-                            "verify_aud": False,
-                            "verify_iss": False,
-                            "verify_exp": True,
-                        }
-                    )
-                    user_id = decoded.get('sub')  # Supabase user ID
-                    
-                    if not user_id:
-                        raise ValueError("No user ID in token")
-                    
-                    logger.info(f"Authenticated user {user_id} for path: {request.url.path}")
-                    request.state.auth_type = "supabase_jwt"
-                    request.state.auth_token = token
-                    request.state.user_id = user_id
-                    response = await call_next(request)
-                    return response
-                except (JWTError, ValueError) as e:
-                    client_host = getattr(request.client, 'host', 'unknown') if request.client else 'unknown'
-                    logger.warning(f"Invalid JWT token from {client_host}: {str(e)}")
-                    raise HTTPException(
-                        status_code=401,
-                        detail="Invalid JWT token format"
-                    )
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.error(f"JWT validation error: {e}")
-                raise HTTPException(
-                    status_code=500,
-                    detail="Token validation service error"
-                )
-    except HTTPException:
-        pass
+    credentials: Optional[HTTPAuthorizationCredentials] = await security(request)
+    if credentials:
+        try:
+            token = credentials.credentials
+            decoded = jwt.decode(
+                token,
+                key=SUPABASE_JWT_SECRET or "",
+                algorithms=["HS256", "HS384", "HS512"],
+                options={
+                    "verify_signature": bool(SUPABASE_JWT_SECRET),
+                    "verify_aud": False,
+                    "verify_iss": False,
+                    "verify_exp": True,
+                }
+            )
+            user_id = decoded.get('sub')
+
+            if not user_id:
+                raise ValueError("No user ID in token")
+
+            logger.info(f"Authenticated user {user_id} for path: {request.url.path}")
+            request.state.auth_type = "supabase_jwt"
+            request.state.auth_token = token
+            request.state.user_id = user_id
+            response = await call_next(request)
+            return response
+        except (JWTError, ValueError) as e:
+            client_host = getattr(request.client, 'host', 'unknown') if request.client else 'unknown'
+            logger.warning(f"Invalid JWT token from {client_host}: {str(e)}")
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid JWT token format"}
+            )
+        except Exception as e:
+            logger.error(f"JWT validation error: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Token validation service error"}
+            )
     
-    # If no auth provided, raise exception with detailed error
+    # If no auth provided, return 401 directly (JSONResponse because
+    # HTTPException raised inside middleware isn't caught by FastAPI's handler)
     client_host = getattr(request.client, 'host', 'unknown') if request.client else 'unknown'
     logger.warning(f"Unauthenticated request to protected path: {request.url.path} from {client_host}")
-    raise HTTPException(
+    return JSONResponse(
         status_code=401,
-        detail={
-            "error": "Authentication required",
-            "message": "Provide API key in X-API-Key header or JWT token in Authorization header",
-            "supported_methods": ["api_key", "jwt_bearer"]
+        content={
+            "detail": {
+                "error": "Authentication required",
+                "message": "Provide API key in X-API-Key header or JWT token in Authorization header",
+                "supported_methods": ["api_key", "jwt_bearer"]
+            }
         }
     )
