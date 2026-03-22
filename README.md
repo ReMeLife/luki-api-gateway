@@ -1,6 +1,6 @@
 # luki-api-gateway
 
-> **This repository is archived.** Active development continues in a private repository. This public version reflects the architecture from the ReMeLife integration era and is no longer maintained or deployed.
+> **This repository is archived.** Active development continues in a private repository. This public version reflects the architecture from the ReMeLife integration era and is no longer maintained.
 
 Single entry point for clients to access LUKi AI services: chat, memory, cognitive modules, and reporting.
 
