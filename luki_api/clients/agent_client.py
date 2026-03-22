@@ -245,11 +245,29 @@ class AgentClient:
             ) as response:
                 response.raise_for_status()
                 
+                # Buffer-based SSE parser: TCP chunks can split events
+                buffer = ""
                 async for chunk in response.aiter_text():
-                    if chunk.strip():
-                        # Parse server-sent events format
-                        if chunk.startswith("data: "):
-                            data = chunk[6:].strip()
+                    buffer += chunk
+                    while "\n\n" in buffer:
+                        event, buffer = buffer.split("\n\n", 1)
+                        for line in event.strip().split("\n"):
+                            if line.startswith("data: "):
+                                data = line[6:].strip()
+                                if data and data != "[DONE]":
+                                    try:
+                                        parsed_data = json.loads(data)
+                                        if "token" in parsed_data:
+                                            yield parsed_data["token"]
+                                        elif "content" in parsed_data:
+                                            yield parsed_data["content"]
+                                    except json.JSONDecodeError:
+                                        yield data
+                # Flush remaining buffer
+                if buffer.strip():
+                    for line in buffer.strip().split("\n"):
+                        if line.startswith("data: "):
+                            data = line[6:].strip()
                             if data and data != "[DONE]":
                                 try:
                                     parsed_data = json.loads(data)
@@ -258,10 +276,7 @@ class AgentClient:
                                     elif "content" in parsed_data:
                                         yield parsed_data["content"]
                                 except json.JSONDecodeError:
-                                    # If not JSON, yield the raw data
                                     yield data
-                        else:
-                            yield chunk
                             
         except httpx.HTTPStatusError as e:
             logger.error(f"Agent service streaming HTTP error: {e.response.status_code}")

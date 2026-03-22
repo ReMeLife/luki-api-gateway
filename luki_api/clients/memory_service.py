@@ -10,12 +10,6 @@ from typing import Dict, List, Optional, Any, Union
 from pydantic import BaseModel, Field
 from datetime import datetime, timedelta
 from luki_api.config import settings
-# Metrics tracking temporarily disabled to avoid initialization issues
-# from luki_api.middleware.metrics import (
-#     track_memory_service_request,
-#     track_memory_service_latency,
-#     track_memory_service_error
-# )
 from luki_api.middleware.metrics import (
     track_memory_service_request,
     track_memory_service_latency,
@@ -129,8 +123,6 @@ class MemoryServiceClient:
         if isinstance(data, BaseModel):
             data = data.model_dump()
             
-        # Track the request to the memory service (disabled)
-        # track_memory_service_request(method.upper(), endpoint)
         track_memory_service_request(method.upper(), endpoint)
         start_time = time.time()
         
@@ -158,16 +150,12 @@ class MemoryServiceClient:
                 
                 # Handle non-2xx responses
                 response.raise_for_status()
-                # Track successful request latency (disabled)
                 duration = time.time() - start_time
-                # track_memory_service_latency(method.upper(), endpoint, duration)
                 track_memory_service_latency(method.upper(), endpoint, duration)
                 return response.json()
                 
         except httpx.HTTPStatusError as e:
-            # Track error with status code (disabled)
             error_type = f"HTTP{e.response.status_code}"
-            # track_memory_service_error(method.upper(), endpoint, error_type)
             track_memory_service_error(method.upper(), endpoint, error_type)
             
             try:
@@ -184,17 +172,13 @@ class MemoryServiceClient:
                 response_data=error_data
             )
         except httpx.RequestError as e:
-            # Track connection error (disabled)
             error_type = "ConnectionError"
-            # track_memory_service_error(method.upper(), endpoint, error_type)
             track_memory_service_error(method.upper(), endpoint, error_type)
             
             logger.error(f"Memory service request failed: {str(e)}")
             raise MemoryServiceError(message=f"Request failed: {str(e)}")
         except Exception as e:
-            # Track unexpected errors (disabled)
             error_type = type(e).__name__
-            # track_memory_service_error(method.upper(), endpoint, error_type)
             track_memory_service_error(method.upper(), endpoint, error_type)
             
             logger.error(f"Unexpected error in memory service client: {str(e)}")

@@ -14,7 +14,7 @@ logger = python_logging.getLogger(__name__)
 # Create FastAPI app instance
 app = FastAPI(
     title="LUKi API Gateway", 
-    description="Unified HTTP interface for the LUKi agent & modules - Fixed CORS with explicit origins",  # Force redeploy 13:38
+    description="Unified HTTP interface for the LUKi agent & modules",
     version=settings.VERSION,
     docs_url="/docs",
     redoc_url="/redoc",

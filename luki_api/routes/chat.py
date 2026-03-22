@@ -20,7 +20,7 @@ from luki_api.clients.agent_client import (
 from luki_api.clients.memory_service import MemoryServiceClient, ELRQueryRequest
 from luki_api.clients.security_service import enforce_policy_scopes
 from luki_api.routes.memories import _invalidate_user_memories_cache
-from luki_api.middleware.rate_limit import check_daily_message_limit, record_daily_message
+from luki_api.middleware.rate_limit import check_message_limit, record_message
 from datetime import datetime
 
 router = APIRouter()
@@ -770,9 +770,8 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
                 detail="Latest message must be from user"
             )
         
-        # Check daily message limit based on account tier
-        account_tier = (chat_request.account_tier or "free").lower()
-        rate_limit_error = await check_daily_message_limit(chat_request.user_id, account_tier)
+        # Check message limit (20 per 3-hour window)
+        rate_limit_error = await check_message_limit(chat_request.user_id)
         if rate_limit_error:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -966,8 +965,8 @@ async def chat_endpoint(chat_request: ChatRequest, request: Request):
             conversation_id=conversation_id
         )
         
-        # Record the message for daily rate limiting (fire-and-forget, don't block response)
-        asyncio.create_task(record_daily_message(chat_request.user_id))
+        # Record the message for rate limiting (fire-and-forget, don't block response)
+        asyncio.create_task(record_message(chat_request.user_id))
         
         # Return the conversation_id as session_id for frontend to use
         # This ensures conversation continuity

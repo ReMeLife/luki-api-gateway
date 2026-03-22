@@ -1,5 +1,4 @@
 # Multi-stage build for LUKi API Gateway
-# REBUILD: Fixed empty query validation - 2025-10-03 13:21
 FROM python:3.11-slim as builder
 
 # Install build dependencies
@@ -13,15 +12,11 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy requirements and install dependencies
-COPY requirements-railway.txt .
-RUN pip install --no-cache-dir -r requirements-railway.txt
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Production stage
 FROM python:3.11-slim
-
-# Install minimal runtime dependencies
-RUN apt-get update && apt-get install -y \
-    && rm -rf /var/lib/apt/lists/*
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
@@ -43,7 +38,7 @@ EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8080/health')"
+    CMD python -c "import httpx; httpx.get('http://localhost:8080/health')"
 
 # Start command
 CMD ["uvicorn", "luki_api.main:app", "--host", "0.0.0.0", "--port", "8080"]
